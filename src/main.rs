@@ -1,5 +1,8 @@
 #![allow(unused_imports)]
-use std::{io::Write, net::TcpListener};
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -13,7 +16,19 @@ fn main() {
         match stream {
             Ok(mut stream) => {
                 println!("accepted new connection");
-                let _ = stream.write(b"+PONG\r\n");
+                let mut buf = [0u8; 128];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(_) => {
+                            stream.write_all(b"+PONG\r\n");
+                            ()
+                        }
+                        Err(_) => {
+                            println!("Some error");
+                            ()
+                        }
+                    }
+                }
             }
             Err(e) => {
                 println!("error: {}", e);
