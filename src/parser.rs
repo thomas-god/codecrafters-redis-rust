@@ -26,7 +26,6 @@ pub fn parse_command(bytes: &[u8]) -> Option<Vec<RESPSimpleType<'_>>> {
     let mut iter = data.split(DELIMITER);
     let command_len: i32;
     if let Some(word) = iter.next() {
-        println!("parse_command word: {}", word);
         if let Some(first_byte) = word.chars().next() {
             if first_byte != '*' {
                 println!(
@@ -55,7 +54,6 @@ where
     let mut elems: Vec<RESPSimpleType<'a>> = vec![];
 
     while let Some(word) = iter.next() {
-        println!("parse_array word: {}", word);
         if word.is_empty() {
             break;
         }
@@ -81,7 +79,6 @@ where
         return RESPSimpleType::Null;
     }
     if let Some(next_word) = iter.next() {
-        println!("parse_bulk_string word: {}", next_word);
         return RESPSimpleType::String(next_word);
     } else {
         panic!();
