@@ -1,7 +1,8 @@
 #![allow(unused_imports)]
 use parser::{parse_command, RESPSimpleType};
+use store::Store;
+
 use std::{
-    arch::global_asm,
     cell::Cell,
     collections::HashMap,
     io::{ErrorKind, Read, Write},
@@ -12,6 +13,7 @@ use std::{
 };
 
 pub mod parser;
+pub mod store;
 
 fn main() {
     println!("Logs from your program will appear here!");
@@ -22,7 +24,7 @@ fn main() {
         .expect("Cannot put TCP listener in non-blocking mode");
 
     let mut tasks: Vec<RedisTask> = Vec::new();
-    let mut store = Cell::new(HashMap::new());
+    let mut store = Cell::new(Store::new());
 
     loop {
         match listener.accept() {
@@ -65,7 +67,7 @@ impl RedisTask {
         }
     }
 
-    fn poll(&mut self, global_state: &mut Cell<HashMap<String, String>>) {
+    fn poll(&mut self, global_state: &mut Cell<Store>) {
         match self.stream.read(&mut self.buffer) {
             Ok(0) => {
                 println!("Stream terminated");
@@ -88,7 +90,7 @@ impl RedisTask {
         }
     }
 
-    fn process_buffer(&mut self, n: usize, global_state: &mut Cell<HashMap<String, String>>) {
+    fn process_buffer(&mut self, n: usize, global_state: &mut Cell<Store>) {
         if let Some(command) = parse_command(&self.buffer[..n]) {
             if let Some(RESPSimpleType::String(verb)) = command.first() {
                 let response = match *verb {
@@ -109,7 +111,7 @@ impl RedisTask {
         Some(String::from("+PONG\r\n"))
     }
 
-    fn process_echo(&self, command: &Vec<RESPSimpleType>) -> Option<String> {
+    fn process_echo(&self, command: &[RESPSimpleType]) -> Option<String> {
         if let RESPSimpleType::String(message) = command.get(1).unwrap() {
             Some(format!("${}\r\n{}\r\n", message.len(), message))
         } else {
@@ -119,35 +121,47 @@ impl RedisTask {
 
     fn process_set(
         &self,
-        command: &Vec<RESPSimpleType>,
-        global_state: &mut Cell<HashMap<String, String>>,
+        command: &[RESPSimpleType],
+        global_state: &mut Cell<Store>,
     ) -> Option<String> {
-        if let (RESPSimpleType::String(key), RESPSimpleType::String(value)) =
-            (command.get(1).unwrap(), command.get(2).unwrap())
-        {
-            println!("{}: {}", key, value);
-            global_state
-                .get_mut()
-                .insert(String::from(*key), String::from(*value));
-        }
+        let (Some(RESPSimpleType::String(key)), Some(RESPSimpleType::String(value))) =
+            (command.get(1), command.get(2))
+        else {
+            return None;
+        };
+
+        let option = match command.get(3) {
+            Some(RESPSimpleType::String(option)) => Some(option),
+            _ => None,
+        };
+        let option_value = match command.get(4) {
+            Some(RESPSimpleType::String(option)) => option.parse::<usize>().ok(),
+            _ => None,
+        };
+        let ttl = match (option, option_value) {
+            (Some(cmd), Some(cmd_value)) if cmd == &"px" => Some(cmd_value),
+            _ => None,
+        };
+
+        println!("{}: {}", key, value);
+        global_state.get_mut().set(key, value, ttl);
         Some(String::from("+OK\r\n"))
     }
 
     fn process_get(
         &self,
-        command: &Vec<RESPSimpleType>,
-        globale_state: &mut Cell<HashMap<String, String>>,
+        command: &[RESPSimpleType],
+        globale_state: &mut Cell<Store>,
     ) -> Option<String> {
-        if let Some(RESPSimpleType::String(key)) = command.get(1) {
-            let key = String::from(*key);
-            if let Some(&ref value) = globale_state.get_mut().get(&key) {
-                let response = format!("${}\r\n{}\r\n", value.len(), value);
-                Some(response)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let Some(RESPSimpleType::String(key)) = command.get(1) else {
+            return None;
+        };
+        let key = String::from(*key);
+
+        let response = match globale_state.get_mut().get(&key) {
+            Some(value) => format!("${}\r\n{}\r\n", value.len(), value),
+            None => String::from("$-1\r\n"),
+        };
+        Some(response)
     }
 }
