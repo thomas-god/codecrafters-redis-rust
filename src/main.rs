@@ -8,6 +8,8 @@ pub mod parser;
 pub mod store;
 pub mod task;
 
+type Config = HashMap<String, String>;
+
 fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_args();
@@ -18,7 +20,7 @@ fn main() {
         .expect("Cannot put TCP listener in non-blocking mode");
 
     let mut tasks: Vec<RedisTask> = Vec::new();
-    let mut store = Cell::new(Store::new());
+    let mut store = Cell::new(build_store(&config));
 
     loop {
         match listener.accept() {
@@ -42,9 +44,9 @@ fn main() {
     }
 }
 
-fn parse_args() -> HashMap<String, String> {
+fn parse_args() -> Config {
     let mut args_iter = env::args();
-    let mut args: HashMap<String, String> = HashMap::new();
+    let mut args: Config = HashMap::new();
 
     // Drop first args, see `env::args()`
     let _ = args_iter.next();
@@ -57,4 +59,13 @@ fn parse_args() -> HashMap<String, String> {
     }
 
     args
+}
+
+fn build_store(config: &Config) -> Store {
+    if let (Some(dir), Some(dbfilename)) = (config.get("dir"), config.get("dbfilename")) {
+        if let Some(store) = Store::from_dbfile(dir, dbfilename) {
+            return store;
+        }
+    }
+    Store::new()
 }

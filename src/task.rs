@@ -67,6 +67,7 @@ impl RedisTask {
                     "SET" => self.process_set(&command, global_state),
                     "GET" => self.process_get(&command, global_state),
                     "CONFIG" => self.process_config(&command, config),
+                    "KEYS" => self.process_keys(&command, global_state),
                     _ => panic!(),
                 };
                 if let Some(response) = response {
@@ -156,5 +157,19 @@ impl RedisTask {
             }
             _ => panic!(),
         }
+    }
+
+    fn process_keys(
+        &self,
+        _command: &[RESPSimpleType],
+        global_state: &mut Cell<Store>,
+    ) -> Option<String> {
+        let mut response = String::new();
+        let keys = global_state.get_mut().get_keys();
+        response.push_str(&format!("*{}\r\n", keys.len()));
+        for key in keys {
+            response.push_str(&format!("${}\r\n{}\r\n", key.len(), key));
+        }
+        Some(response)
     }
 }
