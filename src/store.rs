@@ -40,10 +40,8 @@ impl Store {
         while let Some(op_code) = content.next() {
             match op_code {
                 0xFA => {
-                    _ = {
-                        let (key, value) = parse_auxiliary_field(&mut content)?;
-                        println!("Auxiliary field : {:?} = {:?}", key, value);
-                    }
+                    let (key, value) = parse_auxiliary_field(&mut content)?;
+                    println!("Auxiliary field : {:?} = {:?}", key, value);
                 }
                 0xFE => {
                     let db_number = content.next()?;
@@ -65,9 +63,6 @@ impl Store {
                             },
                         );
                     }
-                }
-                0xFE => {
-                    let _ = parse_length_encoded_int(&mut content)?;
                 }
                 0xFF => {
                     // Just consume the last 8 bytes from the iterator
@@ -114,8 +109,8 @@ where
     I: Iterator<Item = u8>,
 {
     let mut magic_word = [0; 5];
-    for i in 0..5 {
-        magic_word[i] = content.next()?;
+    for w in &mut magic_word {
+        *w = content.next()?;
     }
     if magic_word != [0x52, 0x45, 0x44, 0x49, 0x53] {
         return None;
@@ -128,8 +123,8 @@ where
     I: Iterator<Item = u8>,
 {
     let mut version = [0; 4];
-    for i in 0..4 {
-        version[i] = content.next()?;
+    for v in &mut version {
+        *v = content.next()?;
     }
     String::from_utf8(version.to_vec()).ok()
 }
@@ -187,8 +182,8 @@ where
     I: Iterator<Item = u8>,
 {
     let mut values = [0u8; 4];
-    for i in 0..4 {
-        values[i] = content.next()?;
+    for value in &mut values {
+        *value = content.next()?;
     }
     Some(u32::from_le_bytes(values))
 }
@@ -219,7 +214,7 @@ where
         0b11000000 => match length_byte & 0b00111111 {
             0 => parse_u8(content).map(|value| Value::Integer(value.into())),
             1 => panic!("Not implemented"),
-            2 => parse_u32(content).map(|value| Value::Integer(value.into())),
+            2 => parse_u32(content).map(Value::Integer),
             n => panic!("Unknown integer to parse, expected 0, 1 or 2 but got {n}"),
         },
         _ => panic!("Wrong bits format for length encoding."),
