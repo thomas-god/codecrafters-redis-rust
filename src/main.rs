@@ -14,7 +14,10 @@ fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_args();
 
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let default_port = String::from("6379");
+    let port = config.get("port").unwrap_or(&default_port);
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
     listener
         .set_nonblocking(true)
         .expect("Cannot put TCP listener in non-blocking mode");
