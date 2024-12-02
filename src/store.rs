@@ -3,10 +3,11 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, TimeDelta, Utc};
+
 struct Item {
     value: String,
-    saved_at: Instant,
-    ttl: Option<usize>,
+    expiry: Option<DateTime<Utc>>,
 }
 
 pub struct Store {
@@ -50,18 +51,12 @@ impl Store {
                 0xFB => {
                     let hash_table_size = parse_length_encoded_int(&mut content)?;
                     let expire_hash_table_size = parse_length_encoded_int(&mut content)?;
-                    let total_size = hash_table_size + expire_hash_table_size;
-                    for _ in 0..total_size {
-                        let (key, value) = parse_key_value(&mut content)?;
-                        println!("{key:?}: {value:?}");
-                        store.insert(
-                            key,
-                            Item {
-                                value,
-                                saved_at: Instant::now(),
-                                ttl: None,
-                            },
-                        );
+                    println!("Total keys to load: {hash_table_size}");
+                    println!("Including {expire_hash_table_size} keys with expiry");
+                    for _ in 0..hash_table_size {
+                        let (key, value, expiry) = parse_key_value(&mut content)?;
+                        println!("{key:?}: {value:?} (expired at {expiry:?})");
+                        store.insert(key, Item { value, expiry });
                     }
                 }
                 0xFF => {
@@ -79,10 +74,12 @@ impl Store {
     }
 
     pub fn set(&mut self, key: &str, value: &str, ttl: Option<usize>) {
+        let expiry = ttl.and_then(|s| {
+            Utc::now().checked_add_signed(TimeDelta::milliseconds(i64::try_from(s).ok()?))
+        });
         let item = Item {
             value: String::from(value),
-            saved_at: Instant::now(),
-            ttl,
+            expiry,
         };
         self.store.insert(String::from(key), item);
     }
@@ -90,8 +87,8 @@ impl Store {
     pub fn get(&self, key: &str) -> Option<String> {
         let item = self.store.get(key)?;
 
-        if let Some(ttl) = item.ttl {
-            if item.saved_at.elapsed() > Duration::from_millis(ttl as u64) {
+        if let Some(expiry) = item.expiry {
+            if expiry < Utc::now() {
                 return None;
             }
         }
@@ -145,22 +142,18 @@ where
     content.next()
 }
 
-fn parse_key_value<I>(content: &mut I) -> Option<(String, String)>
+fn parse_key_value<I>(content: &mut I) -> Option<(String, String, Option<DateTime<Utc>>)>
 where
     I: Iterator<Item = u8>,
 {
     let mut first_byte = content.next()?;
+    let mut expiry: Option<DateTime<Utc>> = None;
     if first_byte == 0xFD {
-        // Just consume 4 bytes from iterator
-        for _ in 0..4 {
-            content.next()?;
-        }
+        expiry = parse_u32(content).map(|epoch| DateTime::from_timestamp(epoch.into(), 0))?;
         first_byte = content.next()?;
     } else if first_byte == 0xFC {
-        // Just consume 8 bytes from iterator
-        for _ in 0..8 {
-            content.next()?;
-        }
+        expiry = parse_u64(content)
+            .map(|epoch| DateTime::from_timestamp_millis(i64::try_from(epoch).ok()?))?;
         first_byte = content.next()?;
     };
 
@@ -171,9 +164,9 @@ where
             else {
                 return None;
             };
-            Some((key, value))
+            Some((key, value, expiry))
         }
-        _ => panic!("Not implemented yet."),
+        first_byte => panic!("Not implemented yet for first_byte={}.", first_byte),
     }
 }
 
@@ -186,6 +179,17 @@ where
         *value = content.next()?;
     }
     Some(u32::from_le_bytes(values))
+}
+
+fn parse_u64<I>(content: &mut I) -> Option<u64>
+where
+    I: Iterator<Item = u8>,
+{
+    let mut values = [0u8; 8];
+    for value in &mut values {
+        *value = content.next()?;
+    }
+    Some(u64::from_le_bytes(values))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -243,7 +247,7 @@ where
 #[cfg(test)]
 mod tests {
     use core::time;
-    use std::thread;
+    use std::{thread, time::Instant};
 
     use super::Store;
 
