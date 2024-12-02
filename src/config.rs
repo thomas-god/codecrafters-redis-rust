@@ -15,11 +15,13 @@ impl Config {
     }
 }
 
+#[derive(Debug)]
 pub enum ReplicationRole {
     Master,
-    Replica(String),
+    Replica((String, String)),
 }
 
+#[derive(Debug)]
 pub struct Replication {
     pub role: ReplicationRole,
     pub replid: String,
@@ -41,10 +43,17 @@ pub fn parse_config() -> Config {
 
     let dbfile = dbfile_config(&args);
 
-    let replication_role = args
-        .get("replicaof")
-        .map(|master| ReplicationRole::Replica(master.clone()))
-        .unwrap_or(ReplicationRole::Master);
+    let replication_role = match args.get("replicaof") {
+        Some(url) => {
+            if let (Some(host), Some(port)) = (url.split(" ").next(), url.split(" ").nth(1)) {
+                ReplicationRole::Replica((host.to_string(), port.to_string()))
+            } else {
+                ReplicationRole::Master
+            }
+        }
+        None => ReplicationRole::Master,
+    };
+    println!("Replication role: {replication_role:?}");
 
     let replication = Replication {
         role: replication_role,

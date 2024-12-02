@@ -1,9 +1,15 @@
 #![allow(unused_imports)]
-use config::{parse_config, Config, DBFile};
+use config::{parse_config, Config, DBFile, ReplicationRole};
 use store::Store;
 use task::RedisTask;
 
-use std::{cell::Cell, collections::HashMap, env, io::ErrorKind, net::TcpListener};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    env,
+    io::{ErrorKind, Write},
+    net::{TcpListener, TcpStream},
+};
 
 pub mod config;
 pub mod fmt;
@@ -14,6 +20,13 @@ pub mod task;
 fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_config();
+
+    if let ReplicationRole::Replica((host, port)) = &config.replication.role {
+        let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
+        master_link
+            .write_all(String::from("*1\r\n$4\r\nPING\r\n").as_bytes())
+            .unwrap();
+    };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
     listener
@@ -44,23 +57,6 @@ fn main() {
         tasks.retain(|task| task.active);
     }
 }
-
-// fn parse_args() -> Config {
-//     let mut args_iter = env::args();
-//     let mut args: Config = HashMap::new();
-
-//     // Drop first args, see `env::args()`
-//     let _ = args_iter.next();
-
-//     while let (Some(cmd), Some(param)) = (args_iter.next(), args_iter.next()) {
-//         let (prefix, cmd) = cmd.split_at(2);
-//         if prefix == "--" {
-//             args.insert(cmd.to_string(), param);
-//         }
-//     }
-
-//     args
-// }
 
 fn build_store(config: &Config) -> Store {
     if let Some(DBFile { dir, dbfilename }) = &config.dbfile {
