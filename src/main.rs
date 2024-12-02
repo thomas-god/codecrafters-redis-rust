@@ -4,6 +4,7 @@ use task::RedisTask;
 
 use std::{cell::Cell, collections::HashMap, env, io::ErrorKind, net::TcpListener};
 
+pub mod fmt;
 pub mod parser;
 pub mod store;
 pub mod task;

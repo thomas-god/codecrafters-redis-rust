@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    fmt::format_string,
     parser::{parse_command, RESPSimpleType},
     store::Store,
 };
@@ -68,6 +69,7 @@ impl RedisTask {
                     "GET" => self.process_get(&command, global_state),
                     "CONFIG" => self.process_config(&command, config),
                     "KEYS" => self.process_keys(&command, global_state),
+                    "INFO" => self.process_info(&command, global_state),
                     _ => panic!(),
                 };
                 if let Some(response) = response {
@@ -127,12 +129,7 @@ impl RedisTask {
             return None;
         };
         let key = String::from(*key);
-
-        let response = match global_state.get_mut().get(&key) {
-            Some(value) => format!("${}\r\n{}\r\n", value.len(), value),
-            None => String::from("$-1\r\n"),
-        };
-        Some(response)
+        Some(format_string(global_state.get_mut().get(&key)))
     }
 
     fn process_config(
@@ -171,5 +168,18 @@ impl RedisTask {
             response.push_str(&format!("${}\r\n{}\r\n", key.len(), key));
         }
         Some(response)
+    }
+
+    fn process_info(
+        &self,
+        command: &[RESPSimpleType],
+        _global_state: &mut Cell<Store>,
+    ) -> Option<String> {
+        match command.get(1) {
+            Some(RESPSimpleType::String(section)) if *section == "replication" => {
+                Some(format_string(Some(String::from("role:master"))))
+            }
+            _ => panic!(),
+        }
     }
 }
