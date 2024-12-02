@@ -4,7 +4,7 @@ type Args = HashMap<String, String>;
 
 pub struct Config {
     pub port: i32,
-    pub replication_role: ReplicationRole,
+    pub replication: Replication,
     pub dbfile: Option<DBFile>,
     args: Args,
 }
@@ -18,6 +18,12 @@ impl Config {
 pub enum ReplicationRole {
     Master,
     Replica(String),
+}
+
+pub struct Replication {
+    pub role: ReplicationRole,
+    pub replid: String,
+    pub repl_offset: usize,
 }
 
 #[derive(Clone)]
@@ -40,10 +46,16 @@ pub fn parse_config() -> Config {
         .map(|master| ReplicationRole::Replica(master.clone()))
         .unwrap_or(ReplicationRole::Master);
 
+    let replication = Replication {
+        role: replication_role,
+        repl_offset: 0,
+        replid: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb "),
+    };
+
     Config {
         port,
         dbfile,
-        replication_role,
+        replication,
         args,
     }
 }

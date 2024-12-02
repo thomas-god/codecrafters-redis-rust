@@ -167,14 +167,19 @@ impl RedisTask {
     fn process_info(&self, command: &[RESPSimpleType], config: &Config) -> Option<String> {
         match command.get(1) {
             Some(RESPSimpleType::String(section)) if *section == "replication" => {
-                match config.replication_role {
-                    ReplicationRole::Master => {
-                        Some(format_string(Some(String::from("role:master"))))
-                    }
-                    ReplicationRole::Replica(_) => {
-                        Some(format_string(Some(String::from("role:slave"))))
-                    }
-                }
+                let mut response = String::new();
+                let role = match config.replication.role {
+                    ReplicationRole::Master => String::from("master"),
+                    ReplicationRole::Replica(_) => String::from("slave"),
+                };
+                response.push_str(&format!("role:{role}\r\n"));
+                response.push_str(&format!("master_replid:{}\r\n", config.replication.replid));
+                response.push_str(&format!(
+                    "master_repl_offset:{}\r\n",
+                    config.replication.repl_offset
+                ));
+
+                Some(format_string(Some(response)))
             }
             _ => panic!(),
         }
