@@ -6,7 +6,10 @@ use std::{
     str::from_utf8,
 };
 
+use chrono::naive;
+
 use crate::{
+    config::{Config, ReplicationRole},
     fmt::format_string,
     parser::{parse_command, RESPSimpleType},
     store::Store,
@@ -31,7 +34,7 @@ impl RedisTask {
         }
     }
 
-    pub fn poll(&mut self, global_state: &mut Cell<Store>, config: &HashMap<String, String>) {
+    pub fn poll(&mut self, global_state: &mut Cell<Store>, config: &Config) {
         match self.stream.read(&mut self.buffer) {
             Ok(0) => {
                 println!("Stream terminated");
@@ -54,12 +57,7 @@ impl RedisTask {
         }
     }
 
-    fn process_buffer(
-        &mut self,
-        n: usize,
-        global_state: &mut Cell<Store>,
-        config: &HashMap<String, String>,
-    ) {
+    fn process_buffer(&mut self, n: usize, global_state: &mut Cell<Store>, config: &Config) {
         if let Some(command) = parse_command(&self.buffer[..n]) {
             if let Some(RESPSimpleType::String(verb)) = command.first() {
                 let response = match *verb {
@@ -69,7 +67,7 @@ impl RedisTask {
                     "GET" => self.process_get(&command, global_state),
                     "CONFIG" => self.process_config(&command, config),
                     "KEYS" => self.process_keys(&command, global_state),
-                    "INFO" => self.process_info(&command, global_state),
+                    "INFO" => self.process_info(&command, config),
                     _ => panic!(),
                 };
                 if let Some(response) = response {
@@ -132,18 +130,14 @@ impl RedisTask {
         Some(format_string(global_state.get_mut().get(&key)))
     }
 
-    fn process_config(
-        &self,
-        command: &[RESPSimpleType],
-        config: &HashMap<String, String>,
-    ) -> Option<String> {
+    fn process_config(&self, command: &[RESPSimpleType], config: &Config) -> Option<String> {
         match command.get(1) {
             Some(RESPSimpleType::String(action)) if *action == "GET" => {
                 let Some(RESPSimpleType::String(key)) = command.get(2) else {
                     return None;
                 };
                 let key = String::from(*key);
-                let value = config.get(&key)?.clone();
+                let value = config.get_arg(&key)?.clone();
                 Some(format!(
                     "*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
                     key.len(),
@@ -170,14 +164,17 @@ impl RedisTask {
         Some(response)
     }
 
-    fn process_info(
-        &self,
-        command: &[RESPSimpleType],
-        _global_state: &mut Cell<Store>,
-    ) -> Option<String> {
+    fn process_info(&self, command: &[RESPSimpleType], config: &Config) -> Option<String> {
         match command.get(1) {
             Some(RESPSimpleType::String(section)) if *section == "replication" => {
-                Some(format_string(Some(String::from("role:master"))))
+                match config.replication_role {
+                    ReplicationRole::Master => {
+                        Some(format_string(Some(String::from("role:master"))))
+                    }
+                    ReplicationRole::Replica(_) => {
+                        Some(format_string(Some(String::from("role:slave"))))
+                    }
+                }
             }
             _ => panic!(),
         }
