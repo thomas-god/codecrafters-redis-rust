@@ -70,6 +70,27 @@ where
     elems
 }
 
+pub fn parse_simple_type(bytes: &[u8]) -> Option<RESPSimpleType> {
+    let data = from_utf8(bytes).unwrap();
+    let mut iter = data.split(DELIMITER);
+
+    let Some(word) = iter.next() else {
+        return None;
+    };
+
+    if word.is_empty() {
+        return None;
+    }
+    let (first_byte, data) = word.split_at(1);
+    return match first_byte {
+        "+" => Some(RESPSimpleType::String(data)),
+        "-" => Some(RESPSimpleType::Error(data)),
+        ":" => Some(RESPSimpleType::Integer(data.parse::<i64>().unwrap())),
+        "$" => Some(parse_bulk_string(data, &mut iter)),
+        _ => panic!("Not implemented"),
+    };
+}
+
 fn parse_bulk_string<'a, I>(data: &'a str, iter: &mut I) -> RESPSimpleType<'a>
 where
     I: Iterator<Item = &'a str>,

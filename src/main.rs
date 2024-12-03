@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
 use config::{parse_config, Config, DBFile, ReplicationRole};
+use fmt::format_array;
+use parser::{parse_command, parse_simple_type};
 use store::Store;
 use task::RedisTask;
 
@@ -7,7 +9,7 @@ use std::{
     cell::Cell,
     collections::HashMap,
     env,
-    io::{ErrorKind, Write},
+    io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
 };
 
@@ -23,9 +25,18 @@ fn main() {
 
     if let ReplicationRole::Replica((host, port)) = &config.replication.role {
         let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
-        master_link
-            .write_all(String::from("*1\r\n$4\r\nPING\r\n").as_bytes())
-            .unwrap();
+
+        send_command(&mut master_link, vec![String::from("PING")]);
+        send_command(&mut master_link, vec![
+            String::from("REPLCONF"),
+            String::from("listening-port"),
+            format!("{}", config.port),
+        ]);
+        send_command(&mut master_link, vec![
+            String::from("REPLCONF"),
+            String::from("capa"),
+            String::from("psync2"),
+        ]);
     };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
@@ -65,4 +76,24 @@ fn build_store(config: &Config) -> Store {
         }
     }
     Store::new()
+}
+
+fn send_command(stream: &mut TcpStream, command: Vec<String>) -> Option<String> {
+    let mut buffer = [0u8; 256];
+    let message = format_array(command);
+    stream.write_all(message.as_bytes()).unwrap();
+    match stream.read(&mut buffer) {
+        Ok(bytes_received) => {
+            if let Some(parser::RESPSimpleType::String(content)) =
+                parse_simple_type(&buffer[0..bytes_received])
+            {
+                println!("Received {} from master", content);
+                return Some(content.to_string());
+            } else {
+                return None;
+                // panic!("Master not responding");
+            };
+        }
+        Err(_) => None
+    }
 }
