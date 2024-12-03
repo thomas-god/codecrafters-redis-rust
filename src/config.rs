@@ -58,7 +58,7 @@ pub fn parse_config() -> Config {
     let replication = Replication {
         role: replication_role,
         repl_offset: 0,
-        replid: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb "),
+        replid: String::from("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
     };
 
     Config {

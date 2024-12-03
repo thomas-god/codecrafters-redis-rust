@@ -69,6 +69,7 @@ impl RedisTask {
                     "KEYS" => self.process_keys(&command, global_state),
                     "INFO" => self.process_info(&command, config),
                     "REPLCONF" => Some(String::from("+OK\r\n")),
+                    "PSYNC" => self.process_psync(&config),
                     _ => panic!(),
                 };
                 if let Some(response) = response {
@@ -184,5 +185,12 @@ impl RedisTask {
             }
             _ => panic!(),
         }
+    }
+
+    fn process_psync(&self, config: &Config) -> Option<String> {
+        Some(format_string(Some(format!(
+            "FULLRESYNC {} {}",
+            config.replication.replid, config.replication.repl_offset
+        ))))
     }
 }
