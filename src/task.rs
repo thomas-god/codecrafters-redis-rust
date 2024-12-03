@@ -1,9 +1,5 @@
 use std::{
-    cell::Cell,
-    collections::HashMap,
-    io::{ErrorKind, Read, Write},
-    net::TcpStream,
-    str::from_utf8,
+    cell::Cell, collections::HashMap, fs, io::{ErrorKind, Read, Write}, net::TcpStream, str::from_utf8
 };
 
 use chrono::naive;
@@ -187,10 +183,21 @@ impl RedisTask {
         }
     }
 
-    fn process_psync(&self, config: &Config) -> Option<String> {
-        Some(format_string(Some(format!(
-            "FULLRESYNC {} {}",
-            config.replication.replid, config.replication.repl_offset
-        ))))
+    fn process_psync(&mut self, config: &Config) -> Option<String> {
+        self.stream
+            .write_all(
+                format_string(Some(format!(
+                    "FULLRESYNC {} {}",
+                    config.replication.replid, config.replication.repl_offset
+                )))
+                .as_bytes(),
+            )
+            .ok()?;
+
+        let empty_db = fs::read("empty.rdb").ok()?;
+
+        self.stream.write_all(format!("${}\r\n", empty_db.len()).as_bytes()).ok()?;
+        self.stream.write_all(&empty_db).ok()?;
+        None
     }
 }
