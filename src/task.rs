@@ -68,6 +68,7 @@ impl RedisTask {
                     "CONFIG" => self.process_config(&command, config),
                     "KEYS" => self.process_keys(&command, global_state),
                     "INFO" => self.process_info(&command, config),
+                    "REPLCONF" => Some(String::from("+OK\r\n")),
                     _ => panic!(),
                 };
                 if let Some(response) = response {
