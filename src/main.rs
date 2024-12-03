@@ -25,6 +25,7 @@ fn main() {
     let config = parse_config();
 
     if let ReplicationRole::Replica((host, port)) = &config.replication.role {
+        println!("Starting replication handshake");
         let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
         let mut buffer = [0u8; 2048];
 
