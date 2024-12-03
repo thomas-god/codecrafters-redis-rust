@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use bytes::buf;
 use config::{parse_config, Config, DBFile, ReplicationRole};
 use fmt::format_array;
 use parser::{parse_command, parse_simple_type};
@@ -25,18 +26,36 @@ fn main() {
 
     if let ReplicationRole::Replica((host, port)) = &config.replication.role {
         let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
+        let mut buffer = [0u8; 1024];
 
-        send_command(&mut master_link, vec![String::from("PING")]);
-        send_command(&mut master_link, vec![
-            String::from("REPLCONF"),
-            String::from("listening-port"),
-            format!("{}", config.port),
-        ]);
-        send_command(&mut master_link, vec![
-            String::from("REPLCONF"),
-            String::from("capa"),
-            String::from("psync2"),
-        ]);
+        send_command(&mut master_link, &mut buffer, vec![String::from("PING")]);
+        send_command(
+            &mut master_link,
+            &mut buffer,
+            vec![
+                String::from("REPLCONF"),
+                String::from("listening-port"),
+                format!("{}", config.port),
+            ],
+        );
+        send_command(
+            &mut master_link,
+            &mut buffer,
+            vec![
+                String::from("REPLCONF"),
+                String::from("capa"),
+                String::from("psync2"),
+            ],
+        );
+
+        if let Some(bytes_received) = send_command(
+            &mut master_link,
+            &mut buffer,
+            vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
+        ) {
+            let content = parse_simple_type(&buffer[0..bytes_received]);
+            println!("{:?}", content.unwrap());
+        }
     };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
@@ -78,22 +97,8 @@ fn build_store(config: &Config) -> Store {
     Store::new()
 }
 
-fn send_command(stream: &mut TcpStream, command: Vec<String>) -> Option<String> {
-    let mut buffer = [0u8; 256];
+fn send_command(stream: &mut TcpStream, buffer: &mut [u8], command: Vec<String>) -> Option<usize> {
     let message = format_array(command);
     stream.write_all(message.as_bytes()).unwrap();
-    match stream.read(&mut buffer) {
-        Ok(bytes_received) => {
-            if let Some(parser::RESPSimpleType::String(content)) =
-                parse_simple_type(&buffer[0..bytes_received])
-            {
-                println!("Received {} from master", content);
-                return Some(content.to_string());
-            } else {
-                return None;
-                // panic!("Master not responding");
-            };
-        }
-        Err(_) => None
-    }
+    stream.read(buffer).ok()
 }
