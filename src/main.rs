@@ -26,7 +26,7 @@ fn main() {
 
     if let ReplicationRole::Replica((host, port)) = &config.replication.role {
         let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
-        let mut buffer = [0u8; 1024];
+        let mut buffer = [0u8; 2048];
 
         send_command(&mut master_link, &mut buffer, vec![String::from("PING")]);
         send_command(
