@@ -1,11 +1,12 @@
 #![allow(unused_imports)]
 use bytes::buf;
 use config::{parse_config, Config, DBFile, ReplicationRole};
+use connections::{client::ClientConnection, PollResult};
 use fmt::format_array;
 use parser::{parse_command, parse_simple_type};
 use store::Store;
-use task::RedisTask;
 
+use std::cell::RefCell;
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -15,10 +16,10 @@ use std::{
 };
 
 pub mod config;
+pub mod connections;
 pub mod fmt;
 pub mod parser;
 pub mod store;
-pub mod task;
 
 fn main() {
     println!("Logs from your program will appear here!");
@@ -64,14 +65,15 @@ fn main() {
         .set_nonblocking(true)
         .expect("Cannot put TCP listener in non-blocking mode");
 
-    let mut tasks: Vec<RedisTask> = Vec::new();
+    let mut client_connections: Vec<ClientConnection> = Vec::new();
     let mut store = Cell::new(build_store(&config));
 
     loop {
+        // Check for new client connection to handle
         match listener.accept() {
             Ok((stream, _)) => {
-                let task = RedisTask::new(stream);
-                tasks.push(task);
+                let connection = ClientConnection::new(stream);
+                client_connections.push(connection);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // println!("No new connection");
@@ -81,11 +83,26 @@ fn main() {
             }
         }
 
-        for task in tasks.iter_mut() {
-            (*task).poll(&mut store, &config);
+        // Poll existing connections for pendign command
+        let mut writes_to_replicate: Vec<String> = Vec::new();
+        for client in client_connections.iter_mut() {
+            match (*client).poll(&mut store, &config) {
+                Some(PollResult::Write(cmd)) => {
+                    writes_to_replicate.push(cmd.clone());
+                }
+                _ => {}
+            };
         }
 
-        tasks.retain(|task| task.active);
+        // Propagate writes to replica connections
+        for replica in client_connections.iter_mut().filter(|c| c.replica) {
+            for cmd in writes_to_replicate.iter() {
+                replica.send_command(&cmd);
+            }
+        }
+
+        // Drop inactive connections
+        client_connections.retain(|task| task.active);
     }
 }
 
