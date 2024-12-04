@@ -1,6 +1,6 @@
 pub mod client;
-pub mod master;
 
+#[derive(PartialEq)]
 pub enum PollResult {
     Write(String),
     PromoteToReplica,

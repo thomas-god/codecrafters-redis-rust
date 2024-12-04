@@ -15,13 +15,13 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReplicationRole {
     Master,
     Replica((String, String)),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Replication {
     pub role: ReplicationRole,
     pub replid: String,

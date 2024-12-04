@@ -1,12 +1,14 @@
 #![allow(unused_imports)]
 use bytes::buf;
 use config::{parse_config, Config, DBFile, ReplicationRole};
+use connections::client::ConnectionRole;
 use connections::{client::ClientConnection, PollResult};
 use fmt::format_array;
 use parser::{parse_command, parse_simple_type};
 use store::Store;
 
 use std::cell::RefCell;
+use std::str::from_utf8;
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -25,47 +27,53 @@ fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_config();
 
-    if let ReplicationRole::Replica((host, port)) = &config.replication.role {
-        println!("Starting replication handshake");
-        let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
-        let mut buffer = [0u8; 2048];
+    // let mut master_link : Option<TcpStream> = None;
+    // if let ReplicationRole::Replica((host, port)) = &config.replication.role {
+    //     println!("Starting replication handshake");
+    //     let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
+    //     let mut buffer = [0u8; 2048];
 
-        send_command(&mut master_link, &mut buffer, vec![String::from("PING")]);
-        send_command(
-            &mut master_link,
-            &mut buffer,
-            vec![
-                String::from("REPLCONF"),
-                String::from("listening-port"),
-                format!("{}", config.port),
-            ],
-        );
-        send_command(
-            &mut master_link,
-            &mut buffer,
-            vec![
-                String::from("REPLCONF"),
-                String::from("capa"),
-                String::from("psync2"),
-            ],
-        );
-
-        if let Some(bytes_received) = send_command(
-            &mut master_link,
-            &mut buffer,
-            vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
-        ) {
-            let content = parse_simple_type(&buffer[0..bytes_received]);
-            println!("{:?}", content.unwrap());
-        }
-    };
+    //     send_command(&mut master_link, &mut buffer, vec![String::from("PING")]);
+    //     send_command(
+    //         &mut master_link,
+    //         &mut buffer,
+    //         vec![
+    //             String::from("REPLCONF"),
+    //             String::from("listening-port"),
+    //             format!("{}", config.port),
+    //         ],
+    //     );
+    //     send_command(
+    //         &mut master_link,
+    //         &mut buffer,
+    //         vec![
+    //             String::from("REPLCONF"),
+    //             String::from("capa"),
+    //             String::from("psync2"),
+    //         ],
+    //     );
+    //     send_command(
+    //         &mut master_link,
+    //         &mut buffer,
+    //         vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
+    //     );
+    //     let n = master_link.read(&mut buffer).ok().unwrap();
+    //     println!("Received {n} bytes");
+    //     let rdb_content = from_utf8(&buffer[0..n]).unwrap();
+    //     println!("Received RDB file: {}", rdb_content);
+    // };
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
     listener
         .set_nonblocking(true)
         .expect("Cannot put TCP listener in non-blocking mode");
 
+    let master_connection = ClientConnection::from_handshake(&config);
     let mut client_connections: Vec<ClientConnection> = Vec::new();
+    if let Some(master) = master_connection {
+        println!("Adding master to connections");
+        client_connections.push(master);
+    }
     let mut store = Cell::new(build_store(&config));
 
     loop {
@@ -83,19 +91,22 @@ fn main() {
             }
         }
 
-        // Poll existing connections for pendign command
+        // Poll existing connections for pending command
         let mut writes_to_replicate: Vec<String> = Vec::new();
         for client in client_connections.iter_mut() {
-            match (*client).poll(&mut store, &config) {
-                Some(PollResult::Write(cmd)) => {
+            let results = (*client).poll(&mut store, &config);
+            for res in results {
+                if let PollResult::Write(cmd) = res {
                     writes_to_replicate.push(cmd.clone());
                 }
-                _ => {}
-            };
+            }
         }
 
         // Propagate writes to replica connections
-        for replica in client_connections.iter_mut().filter(|c| c.replica) {
+        for replica in client_connections
+            .iter_mut()
+            .filter(|c| c.connected_with == ConnectionRole::Replica)
+        {
             for cmd in writes_to_replicate.iter() {
                 replica.send_command(&cmd);
             }
