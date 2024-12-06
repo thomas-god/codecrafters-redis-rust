@@ -15,7 +15,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplicationRole {
     Master,
     Replica((String, String)),

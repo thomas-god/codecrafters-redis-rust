@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -247,7 +246,7 @@ where
 #[cfg(test)]
 mod tests {
     use core::time;
-    use std::{thread, time::Instant};
+    use std::thread;
 
     use super::Store;
 

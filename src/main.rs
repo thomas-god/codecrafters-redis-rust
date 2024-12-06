@@ -1,18 +1,12 @@
-#![allow(unused_imports)]
-use bytes::buf;
+// #![allow(unused_imports)]
 use config::{parse_config, Config, DBFile, ReplicationRole};
 use connections::client::ConnectionRole;
 use connections::{client::ClientConnection, PollResult};
 use fmt::format_array;
-use parser::{parse_command, parse_simple_type};
 use store::Store;
 
-use std::cell::RefCell;
-use std::str::from_utf8;
 use std::{
     cell::Cell,
-    collections::HashMap,
-    env,
     io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
 };
@@ -20,61 +14,30 @@ use std::{
 pub mod config;
 pub mod connections;
 pub mod fmt;
-pub mod parser;
 pub mod store;
 
 fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_config();
-
-    // let mut master_link : Option<TcpStream> = None;
-    // if let ReplicationRole::Replica((host, port)) = &config.replication.role {
-    //     println!("Starting replication handshake");
-    //     let mut master_link = TcpStream::connect(format!("{host}:{port}")).unwrap();
-    //     let mut buffer = [0u8; 2048];
-
-    //     send_command(&mut master_link, &mut buffer, vec![String::from("PING")]);
-    //     send_command(
-    //         &mut master_link,
-    //         &mut buffer,
-    //         vec![
-    //             String::from("REPLCONF"),
-    //             String::from("listening-port"),
-    //             format!("{}", config.port),
-    //         ],
-    //     );
-    //     send_command(
-    //         &mut master_link,
-    //         &mut buffer,
-    //         vec![
-    //             String::from("REPLCONF"),
-    //             String::from("capa"),
-    //             String::from("psync2"),
-    //         ],
-    //     );
-    //     send_command(
-    //         &mut master_link,
-    //         &mut buffer,
-    //         vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
-    //     );
-    //     let n = master_link.read(&mut buffer).ok().unwrap();
-    //     println!("Received {n} bytes");
-    //     let rdb_content = from_utf8(&buffer[0..n]).unwrap();
-    //     println!("Received RDB file: {}", rdb_content);
-    // };
+    let mut client_connections: Vec<ClientConnection> = Vec::new();
+    let mut store = Cell::new(build_store(&config));
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
     listener
         .set_nonblocking(true)
         .expect("Cannot put TCP listener in non-blocking mode");
 
-    let master_connection = ClientConnection::from_handshake(&config);
-    let mut client_connections: Vec<ClientConnection> = Vec::new();
-    if let Some(master) = master_connection {
-        println!("Adding master to connections");
-        client_connections.push(master);
+    if let ReplicationRole::Replica((host, port)) = &config.replication.role {
+        let Some(master_link) = TcpStream::connect(format!("{host}:{port}")).ok() else {
+            panic!("Could not connect to master instance.");
+        };
+        let mut connection = ClientConnection::new(master_link);
+        if connection.replication_handshake(&config).is_none() {
+            println!("Error when doing the replication handshake");
+        }
+        client_connections.push(connection);
+        println!("Replication handshake done");
     }
-    let mut store = Cell::new(build_store(&config));
 
     loop {
         // Check for new client connection to handle
@@ -108,7 +71,7 @@ fn main() {
             .filter(|c| c.connected_with == ConnectionRole::Replica)
         {
             for cmd in writes_to_replicate.iter() {
-                replica.send_command(&cmd);
+                replica.send_command(cmd);
             }
         }
 
@@ -128,6 +91,18 @@ fn build_store(config: &Config) -> Store {
 
 fn send_command(stream: &mut TcpStream, buffer: &mut [u8], command: Vec<String>) -> Option<usize> {
     let message = format_array(command);
-    stream.write_all(message.as_bytes()).unwrap();
-    stream.read(buffer).ok()
+    println!("Sending message: {:?}", &message);
+    if let Err(err) = stream.write_all(message.as_bytes()) {
+        println!(
+            "Error when trying to send command {:?}: {:?}",
+            &message, err
+        );
+    }
+    match stream.read(buffer) {
+        Ok(n) => Some(n),
+        Err(err) => {
+            println!("Error when trying to read buffer: {err:?}");
+            None
+        }
+    }
 }

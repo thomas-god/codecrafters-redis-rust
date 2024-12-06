@@ -1,19 +1,14 @@
 use std::{
     cell::Cell,
-    collections::HashMap,
     fs,
     io::{ErrorKind, Read, Write},
     net::TcpStream,
-    str::from_utf8,
-    task::Poll,
 };
-
-use chrono::naive;
 
 use crate::{
     config::{Config, ReplicationRole},
-    fmt::{format_command, format_string},
-    parser::{parse_command, RESPSimpleType},
+    connections::parser::{parse_buffer, BufferElement},
+    fmt::{format_array, format_string},
     send_command,
     store::Store,
 };
@@ -56,19 +51,30 @@ impl ClientConnection {
                 Vec::new()
             }
             Ok(n) => {
-                let data = match from_utf8(&self.buffer) {
-                    Ok(data) => data,
-                    Err(err) => from_utf8(&self.buffer[0..err.valid_up_to()]).unwrap(),
+                let mut poll_results: Vec<PollResult> = vec![];
+                let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
+                    return Vec::new();
                 };
-                println!("Received stream buffer ({n} bytes): {:?}", data);
-                let results = self.process_buffer(n, global_state, config);
-                if results.iter().any(|r| *r == PollResult::PromoteToReplica) {
+                for element in elements {
+                    match element {
+                        BufferElement::Array(cmd) => {
+                            if let Some(result) = self.process_command(&cmd, global_state, config) {
+                                poll_results.push(result);
+                            }
+                        }
+                        _ => println!("Nothing to do"),
+                    }
+                }
+                if poll_results
+                    .iter()
+                    .any(|r| *r == PollResult::PromoteToReplica)
+                {
                     println!(
                         "Promoting connection to replica role, will propagate future writes to it."
                     );
                     self.connected_with = ConnectionRole::Replica;
                 }
-                results
+                poll_results
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // println!("No data in stream");
@@ -86,40 +92,38 @@ impl ClientConnection {
         let _ = self.stream.write_all(cmd.as_bytes());
     }
 
-    fn process_buffer(
+    pub fn set_stream_nonblocking_behavior(&mut self, non_blocking: bool) {
+        self.stream
+            .set_nonblocking(non_blocking)
+            .expect("Cannot put TCP stream in non-blocking mode");
+    }
+
+    fn process_command(
         &mut self,
-        n: usize,
+        cmd: &Vec<String>,
         global_state: &mut Cell<Store>,
         config: &Config,
-    ) -> Vec<PollResult> {
-        let commands = parse_command(&self.buffer[..n]);
-        let mut results: Vec<PollResult> = Vec::new();
-        for command in commands {
-            println!("List of values: {command:?}");
-            if let Some(RESPSimpleType::String(verb)) = command.first() {
-                let res = match verb.as_str() {
-                    "PING" => self.process_ping(),
-                    "ECHO" => self.process_echo(&command),
-                    "SET" => self.process_set(&command, global_state),
-                    "GET" => self.process_get(&command, global_state),
-                    "CONFIG" => self.process_config(&command, config),
-                    "KEYS" => self.process_keys(&command, global_state),
-                    "INFO" => self.process_info(&command, config),
-                    "REPLCONF" => self.process_replconf(),
-                    "PSYNC" => self.process_psync(config),
-                    v => {
-                        println!("Found invalid verb to process: {v}");
-                        None
-                    }
-                };
-                if let Some(res) = res {
-                    results.push(res);
+    ) -> Option<PollResult> {
+        println!("Processing command: {cmd:?}");
+        if let Some(verb) = cmd.first() {
+            match verb.as_str() {
+                "PING" => self.process_ping(),
+                "ECHO" => self.process_echo(cmd),
+                "SET" => self.process_set(cmd, global_state),
+                "GET" => self.process_get(cmd, global_state),
+                "CONFIG" => self.process_config(cmd, config),
+                "KEYS" => self.process_keys(cmd, global_state),
+                "INFO" => self.process_info(cmd, config),
+                "REPLCONF" => self.process_replconf(),
+                "PSYNC" => self.process_psync(config),
+                v => {
+                    println!("Found invalid verb to process: {v}");
+                    None
                 }
-            } else {
-                println!("Command seems empty.")
             }
+        } else {
+            None
         }
-        results
     }
 
     fn process_ping(&mut self) -> Option<PollResult> {
@@ -129,8 +133,8 @@ impl ClientConnection {
         None
     }
 
-    fn process_echo(&mut self, command: &[RESPSimpleType]) -> Option<PollResult> {
-        if let RESPSimpleType::String(message) = command.get(1).unwrap() {
+    fn process_echo(&mut self, command: &[String]) -> Option<PollResult> {
+        if let Some(message) = command.get(1) {
             self.stream
                 .write_all(format!("${}\r\n{}\r\n", message.len(), message).as_bytes())
                 .ok()?;
@@ -142,21 +146,16 @@ impl ClientConnection {
 
     fn process_set(
         &mut self,
-        command: &[RESPSimpleType],
+        command: &[String],
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
-        let (Some(RESPSimpleType::String(key)), Some(RESPSimpleType::String(value))) =
-            (command.get(1), command.get(2))
-        else {
+        let (Some(key), Some(value)) = (command.get(1), command.get(2)) else {
             return None;
         };
 
-        let option = match command.get(3) {
-            Some(RESPSimpleType::String(option)) => Some(option),
-            _ => None,
-        };
+        let option = command.get(3);
         let option_value: Option<usize> = match command.get(4) {
-            Some(RESPSimpleType::String(option)) => option.parse::<usize>().ok(),
+            Some(option_value) => option_value.parse::<usize>().ok(),
             _ => None,
         };
         let ttl = match (option, option_value) {
@@ -171,33 +170,25 @@ impl ClientConnection {
                 .write_all(String::from("+OK\r\n").as_bytes())
                 .ok()?;
         };
-        Some(PollResult::Write(format_command(command)))
+        Some(PollResult::Write(format_array(command.to_vec())))
     }
 
     fn process_get(
         &mut self,
-        command: &[RESPSimpleType],
+        command: &[String],
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
-        let Some(RESPSimpleType::String(key)) = command.get(1) else {
-            return None;
-        };
+        let key = command.get(1)?;
         self.stream
             .write_all(format_string(global_state.get_mut().get(key)).as_bytes())
             .ok()?;
         None
     }
 
-    fn process_config(
-        &mut self,
-        command: &[RESPSimpleType],
-        config: &Config,
-    ) -> Option<PollResult> {
+    fn process_config(&mut self, command: &[String], config: &Config) -> Option<PollResult> {
         match command.get(1) {
-            Some(RESPSimpleType::String(action)) if *action == "GET" => {
-                let Some(RESPSimpleType::String(key)) = command.get(2) else {
-                    return None;
-                };
+            Some(action) if *action == "GET" => {
+                let key = command.get(2)?;
                 let value = config.get_arg(key)?.clone();
                 self.stream
                     .write_all(
@@ -219,7 +210,7 @@ impl ClientConnection {
 
     fn process_keys(
         &mut self,
-        _command: &[RESPSimpleType],
+        _command: &[String],
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
         let mut response = String::new();
@@ -232,9 +223,9 @@ impl ClientConnection {
         None
     }
 
-    fn process_info(&mut self, command: &[RESPSimpleType], config: &Config) -> Option<PollResult> {
+    fn process_info(&mut self, command: &[String], config: &Config) -> Option<PollResult> {
         match command.get(1) {
-            Some(RESPSimpleType::String(section)) if *section == "replication" => {
+            Some(section) if *section == "replication" => {
                 let mut response = String::new();
                 let role = match config.replication.role {
                     ReplicationRole::Master => String::from("master"),
@@ -283,64 +274,54 @@ impl ClientConnection {
         Some(PollResult::PromoteToReplica)
     }
 
-    pub fn from_handshake(config: &Config) -> Option<ClientConnection> {
-        if let ReplicationRole::Replica((host, port)) = &config.replication.role {
-            println!("Starting replication handshake");
-            let mut master_link = TcpStream::connect(format!("{host}:{port}")).ok()?;
-            let mut buffer = [0u8; 2048];
-
-            send_command(&mut master_link, &mut buffer, vec![String::from("PING")])?;
-            send_command(
-                &mut master_link,
-                &mut buffer,
-                vec![
-                    String::from("REPLCONF"),
-                    String::from("listening-port"),
-                    format!("{}", config.port),
-                ],
-            )?;
-            send_command(
-                &mut master_link,
-                &mut buffer,
-                vec![
-                    String::from("REPLCONF"),
-                    String::from("capa"),
-                    String::from("psync2"),
-                ],
-            )?;
-            let n = send_command(
-                &mut master_link,
-                &mut buffer,
-                vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
-            )?;
-            println!("Received {n} bytes from PSYNC cmd");
-
-            let data = match from_utf8(&buffer[0..n]) {
-                Ok(data) => data,
-                Err(err) => {
-                    println!(
-                        "Expected {n} bytes, but buffer was valid up to {} bytes",
-                        err.valid_up_to()
-                    );
-                    from_utf8(&buffer[0..err.valid_up_to()]).unwrap()
-                }
-            };
-            println!("Received RDB file: {}", data);
-
-            // let n = master_link.read(&mut buffer).ok().unwrap();
-            // println!("Received {n} bytes");
-            // let rdb_content = from_utf8(&buffer[0..n]).unwrap();
-            // println!("Received write commands: {}", rdb_content);
-            println!("Handshake successfully done");
-            // let mut tmp = [0u8;128];
-            // tmp.copy_from_slice(&buffer[0..128]);
-            return Some(ClientConnection {
-                stream: master_link,
-                active: true,
-                buffer: [0u8; 512],
-                connected_with: ConnectionRole::Master,
-            });
+    pub fn replication_handshake(&mut self, config: &Config) -> Option<()> {
+        let ReplicationRole::Replica((host, port)) = &config.replication.role else {
+            return None;
         };
-        None
+        println!("Starting replication handshake with {host}:{port}");
+        println!("Enabling blocking behavior of the TCP stream");
+        self.set_stream_nonblocking_behavior(false);
+
+        // let mut master_link = TcpStream::connect(format!("{host}:{port}")).ok()?;
+        // let mut buffer = [0u8; 2048];
+
+        println!("Replication: sending PING");
+        send_command(
+            &mut self.stream,
+            &mut self.buffer,
+            vec![String::from("PING")],
+        )?;
+        println!("Replication: sending REPLCONF (1/2)");
+        send_command(
+            &mut self.stream,
+            &mut self.buffer,
+            vec![
+                String::from("REPLCONF"),
+                String::from("listening-port"),
+                format!("{}", config.port),
+            ],
+        )?;
+
+        println!("Replication: sending REPLCONF (2/2)");
+        send_command(
+            &mut self.stream,
+            &mut self.buffer,
+            vec![
+                String::from("REPLCONF"),
+                String::from("capa"),
+                String::from("psync2"),
+            ],
+        )?;
+        println!("Replication: sending PSYNC");
+        send_command(
+            &mut self.stream,
+            &mut self.buffer,
+            vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
+        )?;
+
+        println!("Disabling blocking behavior of the TCP stream");
+        self.set_stream_nonblocking_behavior(true);
+
+        Some(())
     }
 }
