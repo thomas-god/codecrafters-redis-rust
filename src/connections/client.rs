@@ -149,6 +149,7 @@ impl ClientConnection {
                 "INFO" => self.process_info(cmd, config),
                 "REPLCONF" => self.process_replconf(cmd),
                 "PSYNC" => self.process_psync(config),
+                "WAIT" => self.process_wait(cmd),
                 v => {
                     println!("Found invalid verb to process: {v}");
                     None
@@ -325,6 +326,12 @@ impl ClientConnection {
             .ok()?;
         self.stream.write_all(&empty_db).ok()?;
         Some(PollResult::PromoteToReplica)
+    }
+
+    fn process_wait(&mut self, _command: &[String])-> Option<PollResult>  {
+        let message = String::from(":0\r\n");
+        self.send_string(&message);
+        None
     }
 
     pub fn replication_handshake(&mut self, config: &Config, global_state: &mut Cell<Store>,) -> Option<()> {
