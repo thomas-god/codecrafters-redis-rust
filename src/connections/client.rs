@@ -9,7 +9,6 @@ use crate::{
     config::{Config, ReplicationRole},
     connections::parser::{parse_buffer, BufferElement},
     fmt::{format_array, format_string},
-    // send_command,
     store::Store,
 };
 
@@ -27,6 +26,8 @@ pub struct ClientConnection {
     buffer: [u8; 512],
     pub active: bool,
     pub connected_with: ConnectionRole,
+    replica: bool,
+    replication_offset: u64,
 }
 
 impl ClientConnection {
@@ -40,6 +41,8 @@ impl ClientConnection {
             buffer,
             active: true,
             connected_with: ConnectionRole::Client,
+            replica: false,
+            replication_offset: 0,
         }
     }
 
@@ -51,31 +54,7 @@ impl ClientConnection {
                 Vec::new()
             }
             Ok(n) => {
-                println!("Received buffer of size {n}");
-                let mut poll_results: Vec<PollResult> = vec![];
-                let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
-                    return Vec::new();
-                };
-                for element in elements {
-                    match element {
-                        BufferElement::Array(cmd) => {
-                            if let Some(result) = self.process_command(&cmd, global_state, config) {
-                                poll_results.push(result);
-                            }
-                        }
-                        _ => println!("Nothing to do"),
-                    }
-                }
-                if poll_results
-                    .iter()
-                    .any(|r| *r == PollResult::PromoteToReplica)
-                {
-                    println!(
-                        "Promoting connection to replica role, will propagate future writes to it."
-                    );
-                    self.connected_with = ConnectionRole::Replica;
-                }
-                poll_results
+                self.process_buffer(n, global_state, config)
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // println!("No data in stream");
@@ -89,6 +68,42 @@ impl ClientConnection {
         }
     }
 
+    fn process_buffer(&mut self, n: usize, global_state: &mut Cell<Store>, config: &Config) -> Vec<PollResult> {
+        println!("Received buffer of size {n}");
+        let mut poll_results: Vec<PollResult> = vec![];
+        let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
+            return Vec::new();
+        };
+        for element in elements {
+            match element {
+                BufferElement::Array(cmd) => {
+                    if let Some(result) = self.process_command(&cmd, global_state, config) {
+                        poll_results.push(result);
+                    }
+                    match cmd.first() {
+                        Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
+                            self.replication_offset += n as u64;
+                        },
+                         _ => {}
+                    }
+                }
+                _ => println!("Nothing to do"),
+            }
+        }
+        if poll_results
+            .iter()
+            .any(|r| *r == PollResult::PromoteToReplica)
+        {
+            println!(
+                "Promoting connection to replica role, will propagate future writes to it."
+            );
+            self.connected_with = ConnectionRole::Replica;
+        }
+        println!("{}", self.replication_offset);
+        // self.replication_offset += n as u64;
+        poll_results
+    }
+    
     pub fn send_command(&mut self, command: &Vec<String>) -> Option<usize> {
         let message = format_array(command);
         self.send_string(&message);
@@ -145,9 +160,14 @@ impl ClientConnection {
     }
 
     fn process_ping(&mut self) -> Option<PollResult> {
+        // self.replication_offset += 14;
+        if self.replica {
+            return None;
+        }
         self.stream
             .write_all(String::from("+PONG\r\n").as_bytes())
             .ok()?;
+        println!("Sending PONG back");
         None
     }
 
@@ -184,9 +204,11 @@ impl ClientConnection {
         println!("Setting {}: {}", key, value);
         global_state.get_mut().set(key, value, ttl);
         if let ConnectionRole::Client = &self.connected_with {
-            self.stream
-                .write_all(String::from("+OK\r\n").as_bytes())
-                .ok()?;
+            if !self.replica {
+                self.stream
+                    .write_all(String::from("+OK\r\n").as_bytes())
+                    .ok()?;
+            }
         };
         Some(PollResult::Write(format_array(&command.to_vec())))
     }
@@ -266,18 +288,18 @@ impl ClientConnection {
     }
 
     fn process_replconf(&mut self, command: &[String]) -> Option<PollResult> {
-        // println!("{:?}", command.get(1));
         match command.get(1) {
             Some(option) if option == "GETACK" => {
-                println!("getack");
-                self.send_command(&vec![
+                let message = format_array(&vec![
                     String::from("REPLCONF"),
                     String::from("ACK"),
-                    String::from("0"),
-                ])
+                    format!("{}", self.replication_offset),
+                ]);
+                println!("Sending {message:?}");
+                // self.replication_offset += 37;
+                self.send_string(&message)
             }
             _ => {
-                println!("basic replconf");
                 self.send_string(&String::from("+OK\r\n"));
                 return None;
             }
@@ -305,7 +327,7 @@ impl ClientConnection {
         Some(PollResult::PromoteToReplica)
     }
 
-    pub fn replication_handshake(&mut self, config: &Config) -> Option<()> {
+    pub fn replication_handshake(&mut self, config: &Config, global_state: &mut Cell<Store>,) -> Option<()> {
         let ReplicationRole::Replica((host, port)) = &config.replication.role else {
             return None;
         };
@@ -329,14 +351,17 @@ impl ClientConnection {
             String::from("psync2"),
         ])?;
         println!("Replication: sending PSYNC");
-        self.send_command(&vec![
+        let n = self.send_command(&vec![
             String::from("PSYNC"),
             String::from("?"),
             String::from("-1"),
         ])?;
+        self.process_buffer(n, global_state, config);
 
         println!("Disabling blocking behavior of the TCP stream");
         self.set_stream_nonblocking_behavior(true);
+        self.replication_offset = 0;
+        self.replica = true;
 
         Some(())
     }

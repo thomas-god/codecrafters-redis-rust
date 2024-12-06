@@ -31,7 +31,7 @@ fn main() {
             panic!("Could not connect to master instance.");
         };
         let mut connection = ClientConnection::new(master_link);
-        if connection.replication_handshake(&config).is_none() {
+        if connection.replication_handshake(&config, &mut store).is_none() {
             println!("Error when doing the replication handshake");
         }
         client_connections.push(connection);
