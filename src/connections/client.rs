@@ -53,9 +53,7 @@ impl ClientConnection {
                 self.active = false;
                 Vec::new()
             }
-            Ok(n) => {
-                self.process_buffer(n, global_state, config)
-            }
+            Ok(n) => self.process_buffer(n, global_state, config),
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 // println!("No data in stream");
                 Vec::new()
@@ -68,7 +66,12 @@ impl ClientConnection {
         }
     }
 
-    fn process_buffer(&mut self, n: usize, global_state: &mut Cell<Store>, config: &Config) -> Vec<PollResult> {
+    fn process_buffer(
+        &mut self,
+        n: usize,
+        global_state: &mut Cell<Store>,
+        config: &Config,
+    ) -> Vec<PollResult> {
         println!("Received buffer of size {n}");
         let mut poll_results: Vec<PollResult> = vec![];
         let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
@@ -83,8 +86,8 @@ impl ClientConnection {
                     match cmd.first() {
                         Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
                             self.replication_offset += n as u64;
-                        },
-                         _ => {}
+                        }
+                        _ => {}
                     }
                 }
                 _ => println!("Nothing to do"),
@@ -94,16 +97,14 @@ impl ClientConnection {
             .iter()
             .any(|r| *r == PollResult::PromoteToReplica)
         {
-            println!(
-                "Promoting connection to replica role, will propagate future writes to it."
-            );
+            println!("Promoting connection to replica role, will propagate future writes to it.");
             self.connected_with = ConnectionRole::Replica;
         }
         println!("{}", self.replication_offset);
         // self.replication_offset += n as u64;
         poll_results
     }
-    
+
     pub fn send_command(&mut self, command: &Vec<String>) -> Option<usize> {
         let message = format_array(command);
         self.send_string(&message);
@@ -149,7 +150,7 @@ impl ClientConnection {
                 "INFO" => self.process_info(cmd, config),
                 "REPLCONF" => self.process_replconf(cmd),
                 "PSYNC" => self.process_psync(config),
-                "WAIT" => self.process_wait(cmd),
+                "WAIT" => self.process_wait(global_state),
                 v => {
                     println!("Found invalid verb to process: {v}");
                     None
@@ -328,13 +329,18 @@ impl ClientConnection {
         Some(PollResult::PromoteToReplica)
     }
 
-    fn process_wait(&mut self, _command: &[String])-> Option<PollResult>  {
-        let message = String::from(":0\r\n");
+    fn process_wait(&mut self, global_state: &mut Cell<Store>) -> Option<PollResult> {
+        let n_replicas = global_state.get_mut().n_replicas;
+        let message = format!(":{n_replicas}\r\n");
         self.send_string(&message);
         None
     }
 
-    pub fn replication_handshake(&mut self, config: &Config, global_state: &mut Cell<Store>,) -> Option<()> {
+    pub fn replication_handshake(
+        &mut self,
+        config: &Config,
+        global_state: &mut Cell<Store>,
+    ) -> Option<()> {
         let ReplicationRole::Replica((host, port)) = &config.replication.role else {
             return None;
         };

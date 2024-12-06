@@ -31,7 +31,10 @@ fn main() {
             panic!("Could not connect to master instance.");
         };
         let mut connection = ClientConnection::new(master_link);
-        if connection.replication_handshake(&config, &mut store).is_none() {
+        if connection
+            .replication_handshake(&config, &mut store)
+            .is_none()
+        {
             println!("Error when doing the replication handshake");
         }
         client_connections.push(connection);
@@ -73,7 +76,11 @@ fn main() {
                 replica.send_string(cmd);
             }
         }
-
+        let n_replicas = client_connections
+            .iter()
+            .filter(|c| c.connected_with == ConnectionRole::Replica)
+            .count();
+        store.get_mut().n_replicas = n_replicas as u64;
         // Drop inactive connections
         client_connections.retain(|task| task.active);
     }

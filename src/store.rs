@@ -11,6 +11,7 @@ struct Item {
 
 pub struct Store {
     store: HashMap<String, Item>,
+    pub n_replicas: u64,
 }
 
 impl Default for Store {
@@ -23,6 +24,7 @@ impl Store {
     pub fn new() -> Store {
         Store {
             store: HashMap::new(),
+            n_replicas: 0,
         }
     }
 
@@ -69,7 +71,10 @@ impl Store {
                 }
             }
         }
-        Some(Store { store })
+        Some(Store {
+            store,
+            n_replicas: 0,
+        })
     }
 
     pub fn set(&mut self, key: &str, value: &str, ttl: Option<usize>) {
