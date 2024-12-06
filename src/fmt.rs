@@ -6,13 +6,13 @@ pub fn format_string(value: Option<String>) -> String {
     }
 }
 
-pub fn format_array(values: Vec<String>) -> String {
+pub fn format_array(values: &Vec<String>) -> String {
     let mut response = String::new();
 
     response.push_str(format!("*{}\r\n", values.len()).as_str());
 
     for value in values {
-        response.push_str(format_string(Some(value)).as_str());
+        response.push_str(format_string(Some(value.clone())).as_str());
     }
 
     response
@@ -42,14 +42,14 @@ mod tests {
 
     #[test]
     fn test_format_empty_array() {
-        assert_eq!(String::from("*0\r\n"), format_array(Vec::new()));
+        assert_eq!(String::from("*0\r\n"), format_array(&Vec::new()));
     }
 
     #[test]
     fn test_format_array() {
         assert_eq!(
             String::from("*1\r\n$4\r\ntoto\r\n"),
-            format_array(vec![String::from("toto")])
+            format_array(&vec![String::from("toto")])
         );
     }
 }

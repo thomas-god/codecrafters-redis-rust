@@ -9,7 +9,7 @@ use crate::{
     config::{Config, ReplicationRole},
     connections::parser::{parse_buffer, BufferElement},
     fmt::{format_array, format_string},
-    send_command,
+    // send_command,
     store::Store,
 };
 
@@ -51,6 +51,7 @@ impl ClientConnection {
                 Vec::new()
             }
             Ok(n) => {
+                println!("Received buffer of size {n}");
                 let mut poll_results: Vec<PollResult> = vec![];
                 let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
                     return Vec::new();
@@ -88,8 +89,25 @@ impl ClientConnection {
         }
     }
 
-    pub fn send_command(&mut self, cmd: &str) {
-        let _ = self.stream.write_all(cmd.as_bytes());
+    pub fn send_command(&mut self, command: &Vec<String>) -> Option<usize> {
+        let message = format_array(command);
+        self.send_string(&message);
+        match self.stream.read(&mut self.buffer) {
+            Ok(n) => Some(n),
+            Err(err) => {
+                println!("Error when trying to read buffer: {err:?}");
+                None
+            }
+        }
+    }
+
+    pub fn send_string(&mut self, message: &str) {
+        if let Err(err) = self.stream.write_all(message.as_bytes()) {
+            println!(
+                "Error when trying to send command {:?}: {:?}",
+                &message, err
+            );
+        }
     }
 
     pub fn set_stream_nonblocking_behavior(&mut self, non_blocking: bool) {
@@ -114,7 +132,7 @@ impl ClientConnection {
                 "CONFIG" => self.process_config(cmd, config),
                 "KEYS" => self.process_keys(cmd, global_state),
                 "INFO" => self.process_info(cmd, config),
-                "REPLCONF" => self.process_replconf(),
+                "REPLCONF" => self.process_replconf(cmd),
                 "PSYNC" => self.process_psync(config),
                 v => {
                     println!("Found invalid verb to process: {v}");
@@ -170,7 +188,7 @@ impl ClientConnection {
                 .write_all(String::from("+OK\r\n").as_bytes())
                 .ok()?;
         };
-        Some(PollResult::Write(format_array(command.to_vec())))
+        Some(PollResult::Write(format_array(&command.to_vec())))
     }
 
     fn process_get(
@@ -247,10 +265,23 @@ impl ClientConnection {
         }
     }
 
-    fn process_replconf(&mut self) -> Option<PollResult> {
-        self.stream
-            .write_all(String::from("+OK\r\n").as_bytes())
-            .ok()?;
+    fn process_replconf(&mut self, command: &[String]) -> Option<PollResult> {
+        // println!("{:?}", command.get(1));
+        match command.get(1) {
+            Some(option) if option == "GETACK" => {
+                println!("getack");
+                self.send_command(&vec![
+                    String::from("REPLCONF"),
+                    String::from("ACK"),
+                    String::from("0"),
+                ])
+            }
+            _ => {
+                println!("basic replconf");
+                self.send_string(&String::from("+OK\r\n"));
+                return None;
+            }
+        };
         None
     }
 
@@ -282,42 +313,27 @@ impl ClientConnection {
         println!("Enabling blocking behavior of the TCP stream");
         self.set_stream_nonblocking_behavior(false);
 
-        // let mut master_link = TcpStream::connect(format!("{host}:{port}")).ok()?;
-        // let mut buffer = [0u8; 2048];
-
         println!("Replication: sending PING");
-        send_command(
-            &mut self.stream,
-            &mut self.buffer,
-            vec![String::from("PING")],
-        )?;
+        self.send_command(&vec![String::from("PING")])?;
         println!("Replication: sending REPLCONF (1/2)");
-        send_command(
-            &mut self.stream,
-            &mut self.buffer,
-            vec![
-                String::from("REPLCONF"),
-                String::from("listening-port"),
-                format!("{}", config.port),
-            ],
-        )?;
+        self.send_command(&vec![
+            String::from("REPLCONF"),
+            String::from("listening-port"),
+            format!("{}", config.port),
+        ])?;
 
         println!("Replication: sending REPLCONF (2/2)");
-        send_command(
-            &mut self.stream,
-            &mut self.buffer,
-            vec![
-                String::from("REPLCONF"),
-                String::from("capa"),
-                String::from("psync2"),
-            ],
-        )?;
+        self.send_command(&vec![
+            String::from("REPLCONF"),
+            String::from("capa"),
+            String::from("psync2"),
+        ])?;
         println!("Replication: sending PSYNC");
-        send_command(
-            &mut self.stream,
-            &mut self.buffer,
-            vec![String::from("PSYNC"), String::from("?"), String::from("-1")],
-        )?;
+        self.send_command(&vec![
+            String::from("PSYNC"),
+            String::from("?"),
+            String::from("-1"),
+        ])?;
 
         println!("Disabling blocking behavior of the TCP stream");
         self.set_stream_nonblocking_behavior(true);

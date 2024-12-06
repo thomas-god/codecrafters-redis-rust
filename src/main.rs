@@ -2,12 +2,11 @@
 use config::{parse_config, Config, DBFile, ReplicationRole};
 use connections::client::ConnectionRole;
 use connections::{client::ClientConnection, PollResult};
-use fmt::format_array;
 use store::Store;
 
 use std::{
     cell::Cell,
-    io::{ErrorKind, Read, Write},
+    io::ErrorKind,
     net::{TcpListener, TcpStream},
 };
 
@@ -71,7 +70,7 @@ fn main() {
             .filter(|c| c.connected_with == ConnectionRole::Replica)
         {
             for cmd in writes_to_replicate.iter() {
-                replica.send_command(cmd);
+                replica.send_string(cmd);
             }
         }
 
@@ -87,22 +86,4 @@ fn build_store(config: &Config) -> Store {
         }
     }
     Store::new()
-}
-
-fn send_command(stream: &mut TcpStream, buffer: &mut [u8], command: Vec<String>) -> Option<usize> {
-    let message = format_array(command);
-    println!("Sending message: {:?}", &message);
-    if let Err(err) = stream.write_all(message.as_bytes()) {
-        println!(
-            "Error when trying to send command {:?}: {:?}",
-            &message, err
-        );
-    }
-    match stream.read(buffer) {
-        Ok(n) => Some(n),
-        Err(err) => {
-            println!("Error when trying to read buffer: {err:?}");
-            None
-        }
-    }
 }
