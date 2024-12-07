@@ -1,17 +1,17 @@
 // #![allow(unused_imports)]
 use config::{parse_config, Config, DBFile, ReplicationRole};
-use connections::client::ConnectionRole;
-use connections::{client::ClientConnection, PollResult};
+use connections::client::ClientConnection;
+use event_loop::EventLoop;
 use store::Store;
 
 use std::{
     cell::Cell,
-    io::ErrorKind,
     net::{TcpListener, TcpStream},
 };
 
 pub mod config;
 pub mod connections;
+pub mod event_loop;
 pub mod fmt;
 pub mod store;
 
@@ -41,49 +41,9 @@ fn main() {
         println!("Replication handshake done");
     }
 
-    loop {
-        // Check for new client connection to handle
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let connection = ClientConnection::new(stream);
-                client_connections.push(connection);
-            }
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                // println!("No new connection");
-            }
-            Err(err) => {
-                println!("An error occured: {}", err);
-            }
-        }
+    let mut event_loop = EventLoop::new(listener, client_connections, store, config);
 
-        // Poll existing connections for pending command
-        let mut writes_to_replicate: Vec<String> = Vec::new();
-        for client in client_connections.iter_mut() {
-            let results = (*client).poll(&mut store, &config);
-            for res in results {
-                if let PollResult::Write(cmd) = res {
-                    writes_to_replicate.push(cmd.clone());
-                }
-            }
-        }
-
-        // Propagate writes to replica connections
-        for replica in client_connections
-            .iter_mut()
-            .filter(|c| c.connected_with == ConnectionRole::Replica)
-        {
-            for cmd in writes_to_replicate.iter() {
-                replica.send_string(cmd);
-            }
-        }
-        let n_replicas = client_connections
-            .iter()
-            .filter(|c| c.connected_with == ConnectionRole::Replica)
-            .count();
-        store.get_mut().n_replicas = n_replicas as u64;
-        // Drop inactive connections
-        client_connections.retain(|task| task.active);
-    }
+    event_loop.run()
 }
 
 fn build_store(config: &Config) -> Store {

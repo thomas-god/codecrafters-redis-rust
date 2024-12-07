@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     config::{Config, ReplicationRole},
-    connections::parser::{parse_buffer, BufferElement},
+    connections::parser::{parse_buffer, BufferElement, BufferType},
     fmt::{format_array, format_string},
     store::Store,
 };
@@ -79,18 +79,21 @@ impl ClientConnection {
         };
         for element in elements {
             match element {
-                BufferElement::Array(cmd) => {
+                BufferElement {
+                    value: BufferType::Array(cmd),
+                    n_bytes,
+                } => {
                     if let Some(result) = self.process_command(&cmd, global_state, config) {
                         poll_results.push(result);
                     }
                     match cmd.first() {
                         Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
-                            self.replication_offset += n as u64;
+                            self.replication_offset += n_bytes as u64;
                         }
                         _ => {}
                     }
                 }
-                _ => println!("Nothing to do"),
+                elem => println!("Nothing to do for: {elem:?}"),
             }
         }
         if poll_results
