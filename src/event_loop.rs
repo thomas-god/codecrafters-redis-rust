@@ -48,35 +48,49 @@ impl EventLoop {
             }
 
             // Poll existing connections for pending command
-            let mut writes_to_replicate: Vec<String> = Vec::new();
-            for client in self.client_connections.iter_mut() {
-                let results = (*client).poll(&mut self.store, &self.config);
-                for res in results {
-                    if let PollResult::Write(cmd) = res {
-                        writes_to_replicate.push(cmd.clone());
-                    }
-                }
-            }
+            let writes_to_replicate = self.poll_connections();
 
-            // Propagate writes to replica connections
-            for replica in self
-                .client_connections
-                .iter_mut()
-                .filter(|c| c.connected_with == ConnectionRole::Replica)
-            {
-                for cmd in writes_to_replicate.iter() {
-                    replica.send_string(cmd);
-                }
-            }
-            let n_replicas = self
-                .client_connections
-                .iter()
-                .filter(|c| c.connected_with == ConnectionRole::Replica)
-                .count();
-            self.store.get_mut().n_replicas = n_replicas as u64;
-
-            // Drop inactive connections
-            self.client_connections.retain(|task| task.active);
+            self.propagate_write_commands(writes_to_replicate);
+            self.update_replica_count();
+            self.remove_inactive_connections();
         }
+    }
+
+fn poll_connections(&mut self) -> Vec<String> {
+        let mut writes_to_replicate: Vec<String> = Vec::new();
+        for client in self.client_connections.iter_mut() {
+            let results = (*client).poll(&mut self.store, &self.config);
+            for res in results {
+                if let PollResult::Write(cmd) = res {
+                    writes_to_replicate.push(cmd.clone());
+                }
+            }
+        }
+        writes_to_replicate
+    }
+
+fn propagate_write_commands(&mut self, writes_to_replicate: Vec<String>) {
+        for replica in self
+            .client_connections
+            .iter_mut()
+            .filter(|c| c.connected_with == ConnectionRole::Replica)
+        {
+            for cmd in writes_to_replicate.iter() {
+                replica.send_string(cmd);
+            }
+        }
+    }
+
+fn remove_inactive_connections(&mut self) {
+        self.client_connections.retain(|task| task.active);
+    }
+
+fn update_replica_count(&mut self) {
+        let n_replicas = self
+            .client_connections
+            .iter()
+            .filter(|c| c.connected_with == ConnectionRole::Replica)
+            .count();
+        self.store.get_mut().n_replicas = n_replicas as u64;
     }
 }

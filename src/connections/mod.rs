@@ -5,4 +5,8 @@ pub mod parser;
 pub enum PollResult {
     Write(String),
     PromoteToReplica,
+    WaitForAcks((NumbeOfReplicas, Timeout))
 }
+
+type NumbeOfReplicas = usize;
+type Timeout = usize;
