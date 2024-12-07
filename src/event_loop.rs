@@ -33,26 +33,26 @@ impl EventLoop {
 
     pub fn run(&mut self) -> ! {
         loop {
-            // Check for new client connection to handle
-            match self.listener.accept() {
-                Ok((stream, _)) => {
-                    let connection = ClientConnection::new(stream);
-                    self.client_connections.push(connection);
-                }
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    // println!("No new connection");
-                }
-                Err(err) => {
-                    println!("An error occured: {}", err);
-                }
-            }
-
-            // Poll existing connections for pending command
+            self.check_for_new_connections();
             let writes_to_replicate = self.poll_connections();
-
             self.propagate_write_commands(writes_to_replicate);
             self.update_replica_count();
             self.remove_inactive_connections();
+        }
+    }
+
+fn check_for_new_connections(&mut self) {
+        match self.listener.accept() {
+            Ok((stream, _)) => {
+                let connection = ClientConnection::new(stream);
+                self.client_connections.push(connection);
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                // println!("No new connection");
+            }
+            Err(err) => {
+                println!("An error occured: {}", err);
+            }
         }
     }
 
