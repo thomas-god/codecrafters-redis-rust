@@ -26,8 +26,11 @@ pub struct ClientConnection {
     buffer: [u8; 512],
     pub active: bool,
     pub connected_with: ConnectionRole,
-    replica: bool,
-    replication_offset: u64,
+    replication: Option<Replication>,
+}
+
+struct Replication {
+    replication_offset: usize,
 }
 
 impl ClientConnection {
@@ -41,8 +44,7 @@ impl ClientConnection {
             buffer,
             active: true,
             connected_with: ConnectionRole::Client,
-            replica: false,
-            replication_offset: 0,
+            replication: None,
         }
     }
 
@@ -86,12 +88,15 @@ impl ClientConnection {
                     if let Some(result) = self.process_command(&cmd, global_state, config) {
                         poll_results.push(result);
                     }
-                    match cmd.first() {
-                        Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
-                            self.replication_offset += n_bytes as u64;
+                    if let Some(Replication {ref mut replication_offset}) = self.replication {
+                        match cmd.first() {
+                            Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
+                                *replication_offset += n_bytes;
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
+
+                    };
                 }
                 elem => println!("Nothing to do for: {elem:?}"),
             }
@@ -103,8 +108,7 @@ impl ClientConnection {
             println!("Promoting connection to replica role, will propagate future writes to it.");
             self.connected_with = ConnectionRole::Replica;
         }
-        println!("{}", self.replication_offset);
-        // self.replication_offset += n as u64;
+        println!("{:?}", self.replication.as_ref().map(|r| r.replication_offset));
         poll_results
     }
 
@@ -165,8 +169,7 @@ impl ClientConnection {
     }
 
     fn process_ping(&mut self) -> Option<PollResult> {
-        // self.replication_offset += 14;
-        if self.replica {
+        if self.replication.is_some() {
             return None;
         }
         self.stream
@@ -209,7 +212,7 @@ impl ClientConnection {
         println!("Setting {}: {}", key, value);
         global_state.get_mut().set(key, value, ttl);
         if let ConnectionRole::Client = &self.connected_with {
-            if !self.replica {
+            if self.replication.is_none() {
                 self.stream
                     .write_all(String::from("+OK\r\n").as_bytes())
                     .ok()?;
@@ -298,10 +301,9 @@ impl ClientConnection {
                 let message = format_array(&vec![
                     String::from("REPLCONF"),
                     String::from("ACK"),
-                    format!("{}", self.replication_offset),
+                    format!("{}", self.replication.as_ref().map(|r| r.replication_offset).unwrap_or(0)),
                 ]);
                 println!("Sending {message:?}");
-                // self.replication_offset += 37;
                 self.send_string(&message)
             }
             _ => {
@@ -376,8 +378,7 @@ impl ClientConnection {
 
         println!("Disabling blocking behavior of the TCP stream");
         self.set_stream_nonblocking_behavior(true);
-        self.replication_offset = 0;
-        self.replica = true;
+        self.replication = Some(Replication { replication_offset: 0 });
 
         Some(())
     }
