@@ -12,7 +12,7 @@ use crate::{
     store::Store,
 };
 
-use super::PollResult;
+use super::{PollResult, ReplicationCheckRequest};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ConnectionRole {
@@ -26,11 +26,28 @@ pub struct ClientConnection {
     buffer: [u8; 512],
     pub active: bool,
     pub connected_with: ConnectionRole,
+    wait_for_replication_ack: bool,
     replication: Option<Replication>,
 }
 
+#[derive(Debug)]
 struct Replication {
     replication_offset: usize,
+    last_offset_checked: usize,
+}
+
+impl Replication {
+    fn match_offsets(&mut self) {
+        self.last_offset_checked = self.replication_offset;
+    }
+
+    fn need_to_ask_for_replication_ack(&self) -> bool {
+        println!(
+            "current offset: {}, last offset {}",
+            self.replication_offset, self.last_offset_checked
+        );
+        self.last_offset_checked < self.replication_offset
+    }
 }
 
 impl ClientConnection {
@@ -43,6 +60,7 @@ impl ClientConnection {
             stream,
             buffer,
             active: true,
+            wait_for_replication_ack: false,
             connected_with: ConnectionRole::Client,
             replication: None,
         }
@@ -88,15 +106,7 @@ impl ClientConnection {
                     if let Some(result) = self.process_command(&cmd, global_state, config) {
                         poll_results.push(result);
                     }
-                    if let Some(Replication {ref mut replication_offset}) = self.replication {
-                        match cmd.first() {
-                            Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
-                                *replication_offset += n_bytes;
-                            }
-                            _ => {}
-                        }
-
-                    };
+                    self.track_replication_offset(cmd, n_bytes);
                 }
                 elem => println!("Nothing to do for: {elem:?}"),
             }
@@ -108,8 +118,22 @@ impl ClientConnection {
             println!("Promoting connection to replica role, will propagate future writes to it.");
             self.connected_with = ConnectionRole::Replica;
         }
-        println!("{:?}", self.replication.as_ref().map(|r| r.replication_offset));
         poll_results
+    }
+
+    fn track_replication_offset(&mut self, cmd: Vec<String>, n_bytes: usize) {
+        if let Some(Replication {
+            ref mut replication_offset,
+            last_offset_checked: _,
+        }) = self.replication
+        {
+            match cmd.first() {
+                Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
+                    *replication_offset += n_bytes;
+                }
+                _ => {}
+            }
+        };
     }
 
     pub fn send_command(&mut self, command: &Vec<String>) -> Option<usize> {
@@ -133,7 +157,16 @@ impl ClientConnection {
         }
     }
 
-    pub fn set_stream_nonblocking_behavior(&mut self, non_blocking: bool) {
+    pub fn notify_replication_ack(&mut self, n_replicas: usize) {
+        if !self.wait_for_replication_ack {
+            return;
+        }
+        println!("Notifying client of replication ack");
+        self.send_string(&format!(":{}\r\n", n_replicas));
+        self.wait_for_replication_ack = false;
+    }
+
+    fn set_stream_nonblocking_behavior(&mut self, non_blocking: bool) {
         self.stream
             .set_nonblocking(non_blocking)
             .expect("Cannot put TCP stream in non-blocking mode");
@@ -157,7 +190,7 @@ impl ClientConnection {
                 "INFO" => self.process_info(cmd, config),
                 "REPLCONF" => self.process_replconf(cmd),
                 "PSYNC" => self.process_psync(config),
-                "WAIT" => self.process_wait(global_state),
+                "WAIT" => self.process_wait(cmd),
                 v => {
                     println!("Found invalid verb to process: {v}");
                     None
@@ -301,10 +334,23 @@ impl ClientConnection {
                 let message = format_array(&vec![
                     String::from("REPLCONF"),
                     String::from("ACK"),
-                    format!("{}", self.replication.as_ref().map(|r| r.replication_offset).unwrap_or(0)),
+                    format!(
+                        "{}",
+                        self.replication
+                            .as_ref()
+                            .map(|r| r.replication_offset)
+                            .unwrap_or(0)
+                    ),
                 ]);
                 println!("Sending {message:?}");
                 self.send_string(&message)
+            }
+            Some(option) if option == "ACK" => {
+                match &mut self.replication {
+                    Some(replication) => replication.match_offsets(),
+                    _ => {}
+                }
+                return Some(PollResult::AckSuccessful);
             }
             _ => {
                 self.send_string(&String::from("+OK\r\n"));
@@ -334,11 +380,30 @@ impl ClientConnection {
         Some(PollResult::PromoteToReplica)
     }
 
-    fn process_wait(&mut self, global_state: &mut Cell<Store>) -> Option<PollResult> {
-        let n_replicas = global_state.get_mut().n_replicas;
-        let message = format!(":{n_replicas}\r\n");
-        self.send_string(&message);
-        None
+    fn process_wait(&mut self, command: &[String]) -> Option<PollResult> {
+        let expected_number_of_replicas = command.get(1).and_then(|n| n.parse::<usize>().ok());
+        let ttl = command.get(2).and_then(|n| n.parse::<usize>().ok());
+        match (expected_number_of_replicas, ttl) {
+            (Some(n_replicas), ttl) => {
+                self.wait_for_replication_ack = true;
+                Some(PollResult::WaitForAcks(ReplicationCheckRequest {
+                    number_of_replicas: n_replicas,
+                    timeout: ttl,
+                }))
+            }
+            _ => {
+                println!("Cannot process invalid WAIT command: {command:?}");
+                return None;
+            }
+        }
+    }
+
+    pub fn is_replication_offset_aligned(&self) -> bool {
+        println!("{:?}", self.replication);
+        self.replication
+            .as_ref()
+            .and_then(|r| Some(!r.need_to_ask_for_replication_ack()))
+            .unwrap_or(false)
     }
 
     pub fn replication_handshake(
@@ -378,7 +443,10 @@ impl ClientConnection {
 
         println!("Disabling blocking behavior of the TCP stream");
         self.set_stream_nonblocking_behavior(true);
-        self.replication = Some(Replication { replication_offset: 0 });
+        self.replication = Some(Replication {
+            replication_offset: 0,
+            last_offset_checked: 0,
+        });
 
         Some(())
     }

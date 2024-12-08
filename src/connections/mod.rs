@@ -5,8 +5,12 @@ pub mod parser;
 pub enum PollResult {
     Write(String),
     PromoteToReplica,
-    WaitForAcks((NumbeOfReplicas, Timeout))
+    WaitForAcks(ReplicationCheckRequest),
+    AckSuccessful,
 }
 
-type NumbeOfReplicas = usize;
-type Timeout = usize;
+#[derive(PartialEq, Clone, Copy)]
+pub struct ReplicationCheckRequest {
+    pub number_of_replicas: usize,
+    pub timeout: Option<usize>,
+}
