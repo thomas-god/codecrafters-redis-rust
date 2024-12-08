@@ -130,6 +130,7 @@ impl ClientConnection {
             match cmd.first() {
                 Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
                     *replication_offset += n_bytes;
+                    println!("New replication offset: {replication_offset}");
                 }
                 _ => {}
             }
