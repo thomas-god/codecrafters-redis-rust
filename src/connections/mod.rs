@@ -1,5 +1,6 @@
 pub mod client;
 pub mod parser;
+pub mod stream;
 
 #[derive(PartialEq)]
 pub enum PollResult {

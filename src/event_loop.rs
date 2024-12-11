@@ -77,7 +77,7 @@ impl EventLoop {
                     writes_to_replicate.push(cmd.clone());
                 }
                 if let PollResult::WaitForAcks(request) = &res {
-                    wait_for_acks = Some(request.clone());
+                    wait_for_acks = Some(*request);
                 }
             }
         }
@@ -155,10 +155,10 @@ impl EventLoop {
                 .filter(|c| c.connected_with == ConnectionRole::Replica)
             {
                 let results = replica.poll(&mut self.store, &self.config);
-                if results.iter().any(|res| match res {
-                    PollResult::AckSuccessful => true,
-                    _ => false,
-                }) {
+                if results
+                    .iter()
+                    .any(|res| matches!(res, PollResult::AckSuccessful))
+                {
                     n_replicas_checked += 1;
                     println!("Replicas count increased to {n_replicas_checked}");
                 }

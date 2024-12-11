@@ -1,8 +1,4 @@
-use std::{
-    cell::Cell,
-    fs,
-    net::TcpStream,
-};
+use std::{cell::Cell, fs, net::TcpStream};
 
 use crate::{
     config::{Config, ReplicationRole},
@@ -294,9 +290,8 @@ impl ClientConnection {
                 self.send_string(&message)
             }
             Some(option) if option == "ACK" => {
-                match &mut self.replication {
-                    Some(replication) => replication.match_offsets(),
-                    _ => {}
+                if let Some(replication) = &mut self.replication {
+                    replication.match_offsets();
                 }
                 return Some(PollResult::AckSuccessful);
             }
@@ -343,7 +338,7 @@ impl ClientConnection {
         println!("{:?}", self.replication);
         self.replication
             .as_ref()
-            .and_then(|r| Some(!r.need_to_ask_for_replication_ack()))
+            .map(|r| !r.need_to_ask_for_replication_ack())
             .unwrap_or(false)
     }
 

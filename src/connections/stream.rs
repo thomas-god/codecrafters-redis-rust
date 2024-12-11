@@ -41,7 +41,7 @@ impl<S: Write + Read> RedisStream<S> {
     }
 
     pub fn send_raw(&mut self, bytes: &[u8]) {
-        if let Err(err) = self.stream.write_all(&bytes) {
+        if let Err(err) = self.stream.write_all(bytes) {
             println!("Error when trying to send bytes {:?}: {:?}", &bytes, err);
         }
     }

@@ -100,9 +100,9 @@ fn parse_bulk_string_like(iterator: &mut std::slice::Iter<'_, u8>) -> Option<Buf
         Some((first, second)) if (**first, **second) == (b'\r', b'\n') => {
             iterator.next();
             iterator.next();
-            return from_utf8(&bytes)
+            from_utf8(&bytes)
                 .ok()
-                .map(|word| BufferType::String(word.to_string()));
+                .map(|word| BufferType::String(word.to_string()))
         }
         _ => Some(BufferType::DBFile(bytes)),
     }
