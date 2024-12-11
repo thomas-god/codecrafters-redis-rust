@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     config::{Config, ReplicationRole},
-    connections::parser::{parse_buffer, BufferType},
+    connections::parser::{parse_buffer, BufferType, Command},
     fmt::{format_array, format_string},
     store::Store,
 };
@@ -99,7 +99,7 @@ impl ClientConnection {
         };
         for element in elements {
             match element {
-                BufferType::Array(cmd) => {
+                BufferType::Command(Command { cmd, verb: _ }) => {
                     if let Some(result) = self.process_command(&cmd, global_state, config) {
                         poll_results.push(result);
                     }

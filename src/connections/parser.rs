@@ -6,7 +6,48 @@ use itertools::Itertools;
 pub enum BufferType {
     String(String),
     DBFile(Vec<u8>),
-    Array(Vec<String>),
+    Command(Command),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Command {
+    pub verb: CommandVerb,
+    pub cmd: Vec<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CommandVerb {
+    PING,
+    ECHO,
+    SET,
+    GET,
+    CONFIG,
+    KEYS,
+    INFO,
+    REPLCONF,
+    PSYNC,
+    WAIT,
+}
+
+impl TryFrom<String> for CommandVerb {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let value = value.to_uppercase();
+        match value.as_str() {
+            "PING" => Ok(Self::PING),
+            "ECHO" => Ok(Self::ECHO),
+            "SET" => Ok(Self::SET),
+            "GET" => Ok(Self::GET),
+            "CONFIG" => Ok(Self::CONFIG),
+            "KEYS" => Ok(Self::KEYS),
+            "INFO" => Ok(Self::INFO),
+            "REPLCONF" => Ok(Self::REPLCONF),
+            "PSYNC" => Ok(Self::PSYNC),
+            "WAIT" => Ok(Self::WAIT),
+            _ => Err("Unsupported command verb"),
+        }
+    }
 }
 
 pub fn parse_buffer(buffer: &[u8]) -> Option<Vec<BufferType>> {
@@ -26,7 +67,7 @@ pub fn parse_buffer(buffer: &[u8]) -> Option<Vec<BufferType>> {
                 }
             }
             b'*' => {
-                if let Some(array) = parse_array(&mut buffer_iter) {
+                if let Some(array) = parse_array_into_command(&mut buffer_iter) {
                     elements.push(array);
                 }
             }
@@ -67,7 +108,7 @@ fn parse_bulk_string_like(iterator: &mut std::slice::Iter<'_, u8>) -> Option<Buf
     }
 }
 
-fn parse_array(iterator: &mut std::slice::Iter<'_, u8>) -> Option<BufferType> {
+fn parse_array_into_command(iterator: &mut std::slice::Iter<'_, u8>) -> Option<BufferType> {
     let len = from_utf8(&find_until_next_delimiter(iterator))
         .ok()
         .and_then(|bytes| bytes.parse::<usize>().ok())?;
@@ -80,7 +121,12 @@ fn parse_array(iterator: &mut std::slice::Iter<'_, u8>) -> Option<BufferType> {
         }
     }
 
-    Some(BufferType::Array(elements))
+    let verb = CommandVerb::try_from(elements.first().unwrap_or(&String::from("")).clone()).ok()?;
+
+    Some(BufferType::Command(Command {
+        cmd: elements,
+        verb,
+    }))
 }
 
 fn find_until_next_delimiter<'a, I>(iterator: &mut I) -> Vec<u8>
@@ -100,7 +146,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_buffer, BufferType};
+    use super::{parse_buffer, BufferType, Command, CommandVerb};
 
     #[test]
     fn buffer_with_simple_string() {
@@ -153,10 +199,10 @@ mod tests {
     #[test]
     fn test_buffer_with_array() {
         let buffer = String::from("*2\r\n$4\r\nECHO\r\n$4\r\ntoto\r\n").into_bytes();
-        let expected_response = vec![BufferType::Array(vec![
-            String::from("ECHO"),
-            String::from("toto"),
-        ])];
+        let expected_response = vec![BufferType::Command(Command {
+            cmd: vec![String::from("ECHO"), String::from("toto")],
+            verb: CommandVerb::ECHO,
+        })];
         assert_eq!(parse_buffer(&buffer), Some(expected_response));
     }
 
@@ -216,21 +262,30 @@ mod tests {
                 "FULLRESYNC 75cd7bc10c49047e0d163660f3b90625b1af31dc 0",
             )),
             BufferType::DBFile(db_file),
-            BufferType::Array(vec![
-                String::from("SET"),
-                String::from("foo"),
-                String::from("123"),
-            ]),
-            BufferType::Array(vec![
-                String::from("SET"),
-                String::from("bar"),
-                String::from("456"),
-            ]),
-            BufferType::Array(vec![
-                String::from("SET"),
-                String::from("baz"),
-                String::from("789"),
-            ]),
+            BufferType::Command(Command {
+                cmd: vec![
+                    String::from("SET"),
+                    String::from("foo"),
+                    String::from("123"),
+                ],
+                verb: CommandVerb::SET,
+            }),
+            BufferType::Command(Command {
+                cmd: vec![
+                    String::from("SET"),
+                    String::from("bar"),
+                    String::from("456"),
+                ],
+                verb: CommandVerb::SET,
+            }),
+            BufferType::Command(Command {
+                cmd: vec![
+                    String::from("SET"),
+                    String::from("baz"),
+                    String::from("789"),
+                ],
+                verb: CommandVerb::SET,
+            }),
         ];
         assert_eq!(parse_buffer(&buffer), Some(expected_response));
     }
