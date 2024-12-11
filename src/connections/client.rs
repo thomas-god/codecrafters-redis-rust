@@ -1,18 +1,17 @@
 use std::{
     cell::Cell,
     fs,
-    io::{ErrorKind, Read, Write},
     net::TcpStream,
 };
 
 use crate::{
     config::{Config, ReplicationRole},
-    connections::parser::{parse_buffer, BufferType, Command},
+    connections::parser::{BufferType, Command},
     fmt::{format_array, format_string},
     store::Store,
 };
 
-use super::{PollResult, ReplicationCheckRequest};
+use super::{stream::RedisStream, PollResult, ReplicationCheckRequest};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ConnectionRole {
@@ -22,8 +21,7 @@ pub enum ConnectionRole {
 }
 
 pub struct ClientConnection {
-    stream: TcpStream,
-    buffer: [u8; 512],
+    stream: RedisStream<TcpStream>,
     pub active: bool,
     pub connected_with: ConnectionRole,
     wait_for_replication_ack: bool,
@@ -52,13 +50,12 @@ impl Replication {
 
 impl ClientConnection {
     pub fn new(stream: TcpStream) -> ClientConnection {
-        let buffer = [0u8; 512];
         stream
             .set_nonblocking(true)
             .expect("Cannot put TCP stream in non-blocking mode");
+        let stream = RedisStream::new(stream);
         ClientConnection {
             stream,
-            buffer,
             active: true,
             wait_for_replication_ack: false,
             connected_with: ConnectionRole::Client,
@@ -67,55 +64,37 @@ impl ClientConnection {
     }
 
     pub fn poll(&mut self, global_state: &mut Cell<Store>, config: &Config) -> Vec<PollResult> {
-        match self.stream.read(&mut self.buffer) {
-            Ok(0) => {
-                println!("Stream terminated");
-                self.active = false;
-                Vec::new()
-            }
-            Ok(n) => self.process_buffer(n, global_state, config),
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                // println!("No data in stream");
-                Vec::new()
-            }
-            Err(err) => {
-                println!("Stream terminated with err: {}", err);
-                self.active = false;
-                Vec::new()
-            }
-        }
-    }
-
-    fn process_buffer(
-        &mut self,
-        n: usize,
-        global_state: &mut Cell<Store>,
-        config: &Config,
-    ) -> Vec<PollResult> {
-        println!("Received buffer of size {n}");
-        let mut poll_results: Vec<PollResult> = vec![];
-        let Some(elements) = parse_buffer(&self.buffer[0..n]) else {
-            return Vec::new();
-        };
-        for element in elements {
-            match element {
-                BufferType::Command(Command { cmd, verb: _ }) => {
-                    if let Some(result) = self.process_command(&cmd, global_state, config) {
-                        poll_results.push(result);
+        match self.stream.read() {
+            Some(elements) => {
+                let mut poll_results: Vec<PollResult> = vec![];
+                for element in elements {
+                    match element {
+                        BufferType::Command(Command { cmd, verb: _ }) => {
+                            if let Some(result) = self.process_command(&cmd, global_state, config) {
+                                poll_results.push(result);
+                            }
+                            self.track_replication_offset(cmd);
+                        }
+                        elem => println!("Nothing to do for: {elem:?}"),
                     }
-                    self.track_replication_offset(cmd);
                 }
-                elem => println!("Nothing to do for: {elem:?}"),
+                if poll_results
+                    .iter()
+                    .any(|r| *r == PollResult::PromoteToReplica)
+                {
+                    println!(
+                        "Promoting connection to replica role, will propagate future writes to it."
+                    );
+                    self.connected_with = ConnectionRole::Replica;
+                }
+                poll_results
+            }
+            _ => {
+                println!("Unable to read from stream");
+                self.active = false;
+                vec![]
             }
         }
-        if poll_results
-            .iter()
-            .any(|r| *r == PollResult::PromoteToReplica)
-        {
-            println!("Promoting connection to replica role, will propagate future writes to it.");
-            self.connected_with = ConnectionRole::Replica;
-        }
-        poll_results
     }
 
     fn track_replication_offset(&mut self, cmd: Vec<String>) {
@@ -135,25 +114,14 @@ impl ClientConnection {
         };
     }
 
-    pub fn send_command(&mut self, command: &Vec<String>) -> Option<usize> {
+    pub fn send_command(&mut self, command: &Vec<String>) {
         let message = format_array(command);
         self.send_string(&message);
-        match self.stream.read(&mut self.buffer) {
-            Ok(n) => Some(n),
-            Err(err) => {
-                println!("Error when trying to read buffer: {err:?}");
-                None
-            }
-        }
+        self.stream.read();
     }
 
     pub fn send_string(&mut self, message: &str) {
-        if let Err(err) = self.stream.write_all(message.as_bytes()) {
-            println!(
-                "Error when trying to send command {:?}: {:?}",
-                &message, err
-            );
-        }
+        self.stream.send(message);
     }
 
     pub fn notify_replication_ack(&mut self, n_replicas: usize) {
@@ -163,12 +131,6 @@ impl ClientConnection {
         println!("Notifying client of replication ack");
         self.send_string(&format!(":{}\r\n", n_replicas));
         self.wait_for_replication_ack = false;
-    }
-
-    fn set_stream_nonblocking_behavior(&mut self, non_blocking: bool) {
-        self.stream
-            .set_nonblocking(non_blocking)
-            .expect("Cannot put TCP stream in non-blocking mode");
     }
 
     fn process_command(
@@ -203,19 +165,16 @@ impl ClientConnection {
     fn process_ping(&mut self) -> Option<PollResult> {
         if self.replication.is_some() {
             return None;
-        }
-        self.stream
-            .write_all(String::from("+PONG\r\n").as_bytes())
-            .ok()?;
+        };
+        self.stream.send(&String::from("+PONG\r\n"));
         println!("Sending PONG back");
         None
     }
 
     fn process_echo(&mut self, command: &[String]) -> Option<PollResult> {
         if let Some(message) = command.get(1) {
-            self.stream
-                .write_all(format!("${}\r\n{}\r\n", message.len(), message).as_bytes())
-                .ok()?;
+            let message = format!("${}\r\n{}\r\n", message.len(), message);
+            self.stream.send(&message);
             None
         } else {
             None
@@ -245,9 +204,7 @@ impl ClientConnection {
         global_state.get_mut().set(key, value, ttl);
         if let ConnectionRole::Client = &self.connected_with {
             if self.replication.is_none() {
-                self.stream
-                    .write_all(String::from("+OK\r\n").as_bytes())
-                    .ok()?;
+                self.stream.send(&String::from("+OK\r\n"));
             }
         };
         Some(PollResult::Write(format_array(&command.to_vec())))
@@ -260,8 +217,7 @@ impl ClientConnection {
     ) -> Option<PollResult> {
         let key = command.get(1)?;
         self.stream
-            .write_all(format_string(global_state.get_mut().get(key)).as_bytes())
-            .ok()?;
+            .send(&format_string(global_state.get_mut().get(key)));
         None
     }
 
@@ -270,18 +226,14 @@ impl ClientConnection {
             Some(action) if *action == "GET" => {
                 let key = command.get(2)?;
                 let value = config.get_arg(key)?.clone();
-                self.stream
-                    .write_all(
-                        format!(
-                            "*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
-                            key.len(),
-                            key,
-                            value.len(),
-                            value
-                        )
-                        .as_bytes(),
-                    )
-                    .ok()?;
+                let message = format!(
+                    "*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
+                    key.len(),
+                    key,
+                    value.len(),
+                    value
+                );
+                self.stream.send(&message);
                 None
             }
             _ => panic!(),
@@ -299,7 +251,7 @@ impl ClientConnection {
         for key in keys {
             response.push_str(&format!("${}\r\n{}\r\n", key.len(), key));
         }
-        self.stream.write_all(response.as_bytes()).ok()?;
+        self.stream.send(&response);
         None
     }
 
@@ -317,10 +269,7 @@ impl ClientConnection {
                     "master_repl_offset:{}\r\n",
                     config.replication.repl_offset
                 ));
-
-                self.stream
-                    .write_all(format_string(Some(response)).as_bytes())
-                    .ok()?;
+                self.stream.send(&format_string(Some(response)));
                 None
             }
             _ => panic!(),
@@ -360,22 +309,15 @@ impl ClientConnection {
     }
 
     fn process_psync(&mut self, config: &Config) -> Option<PollResult> {
-        self.stream
-            .write_all(
-                format_string(Some(format!(
-                    "+FULLRESYNC {} {}",
-                    config.replication.replid, config.replication.repl_offset
-                )))
-                .as_bytes(),
-            )
-            .ok()?;
+        self.stream.send(&format_string(Some(format!(
+            "+FULLRESYNC {} {}",
+            config.replication.replid, config.replication.repl_offset
+        ))));
 
         let empty_db = fs::read("empty.rdb").ok()?;
 
-        self.stream
-            .write_all(format!("${}\r\n", empty_db.len()).as_bytes())
-            .ok()?;
-        self.stream.write_all(&empty_db).ok()?;
+        self.stream.send(&format!("${}\r\n", empty_db.len()));
+        self.stream.send_raw(&empty_db);
         Some(PollResult::PromoteToReplica)
     }
 
@@ -415,33 +357,33 @@ impl ClientConnection {
         };
         println!("Starting replication handshake with {host}:{port}");
         println!("Enabling blocking behavior of the TCP stream");
-        self.set_stream_nonblocking_behavior(false);
+        self.stream.set_stream_nonblocking_behavior(false);
 
         println!("Replication: sending PING");
-        self.send_command(&vec![String::from("PING")])?;
+        self.send_command(&vec![String::from("PING")]);
         println!("Replication: sending REPLCONF (1/2)");
         self.send_command(&vec![
             String::from("REPLCONF"),
             String::from("listening-port"),
             format!("{}", config.port),
-        ])?;
+        ]);
 
         println!("Replication: sending REPLCONF (2/2)");
         self.send_command(&vec![
             String::from("REPLCONF"),
             String::from("capa"),
             String::from("psync2"),
-        ])?;
+        ]);
         println!("Replication: sending PSYNC");
-        let n = self.send_command(&vec![
+        self.send_command(&vec![
             String::from("PSYNC"),
             String::from("?"),
             String::from("-1"),
-        ])?;
-        self.process_buffer(n, global_state, config);
+        ]);
+        self.poll(global_state, config);
 
         println!("Disabling blocking behavior of the TCP stream");
-        self.set_stream_nonblocking_behavior(true);
+        self.stream.set_stream_nonblocking_behavior(true);
         self.replication = Some(Replication {
             replication_offset: 0,
             last_offset_checked: 0,
