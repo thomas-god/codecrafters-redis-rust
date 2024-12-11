@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     config::{Config, ReplicationRole},
-    connections::parser::{parse_buffer, BufferElement, BufferType},
+    connections::parser::{parse_buffer, BufferType},
     fmt::{format_array, format_string},
     store::Store,
 };
@@ -99,14 +99,11 @@ impl ClientConnection {
         };
         for element in elements {
             match element {
-                BufferElement {
-                    value: BufferType::Array(cmd),
-                    n_bytes,
-                } => {
+                BufferType::Array(cmd) => {
                     if let Some(result) = self.process_command(&cmd, global_state, config) {
                         poll_results.push(result);
                     }
-                    self.track_replication_offset(cmd, n_bytes);
+                    self.track_replication_offset(cmd);
                 }
                 elem => println!("Nothing to do for: {elem:?}"),
             }
@@ -121,7 +118,8 @@ impl ClientConnection {
         poll_results
     }
 
-    fn track_replication_offset(&mut self, cmd: Vec<String>, n_bytes: usize) {
+    fn track_replication_offset(&mut self, cmd: Vec<String>) {
+        let n_bytes = format_array(&cmd).len();
         if let Some(Replication {
             ref mut replication_offset,
             last_offset_checked: _,
@@ -394,7 +392,7 @@ impl ClientConnection {
             }
             _ => {
                 println!("Cannot process invalid WAIT command: {command:?}");
-                return None;
+                None
             }
         }
     }

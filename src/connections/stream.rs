@@ -2,14 +2,14 @@ use std::io::{Read, Write};
 
 use crate::connections::parser::parse_buffer;
 
-use super::parser::BufferElement;
+use super::parser::BufferType;
 
 pub struct RedisStream<S: Write + Read> {
     stream: S,
 }
 
 impl<S: Write + Read> RedisStream<S> {
-    pub fn read(&mut self) -> Vec<BufferElement> {
+    pub fn read(&mut self) -> Vec<BufferType> {
         let mut buffer = [0u8; 256];
         let Ok(n) = self.stream.read(&mut buffer) else {
             return vec![];
@@ -38,17 +38,14 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::RedisStream;
-    use crate::connections::parser::{BufferElement, BufferType};
+    use crate::connections::parser::BufferType;
 
     #[test]
     fn test_parse_simple_string() {
         let stream = VecDeque::from(String::from("+OK\r\n").into_bytes());
 
         let mut redis_stream = RedisStream { stream };
-        let expected_response = vec![BufferElement {
-            value: BufferType::String(String::from("OK")),
-            n_bytes: 5,
-        }];
+        let expected_response = vec![BufferType::String(String::from("OK"))];
         assert_eq!(redis_stream.read(), expected_response)
     }
 
