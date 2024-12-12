@@ -3,9 +3,7 @@ use std::{
     net::TcpStream,
 };
 
-use crate::connections::parser::parse_buffer;
-
-use super::parser::BufferType;
+use super::parser::{parse_buffer, BufferType};
 
 pub struct RedisStream<S: Write + Read> {
     stream: S,
@@ -15,9 +13,6 @@ pub struct RedisStream<S: Write + Read> {
 impl<S: Write + Read> RedisStream<S> {
     pub fn new(stream: S) -> Self {
         let buffer = [0u8; 512];
-        // stream
-        //     .set_nonblocking(true)
-        //     .expect("Cannot put TCP stream in non-blocking mode");
 
         Self { stream, buffer }
     }

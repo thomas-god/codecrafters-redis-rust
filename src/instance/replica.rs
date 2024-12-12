@@ -9,13 +9,13 @@ use crate::{
     config::Config,
     connections::{
         client::{ClientConnection, ConnectionRole},
+        fmt::format_array,
         PollResult, ReplicationCheckRequest,
     },
-    fmt::format_array,
     store::Store,
 };
 
-pub struct EventLoop {
+pub struct ReplicaInstance {
     listener: TcpListener,
     client_connections: Vec<ClientConnection>,
     store: Cell<Store>,
@@ -24,14 +24,14 @@ pub struct EventLoop {
     last_acked_offset: usize,
 }
 
-impl EventLoop {
+impl ReplicaInstance {
     pub fn new(
         listener: TcpListener,
         client_connections: Vec<ClientConnection>,
         store: Cell<Store>,
         config: Config,
-    ) -> EventLoop {
-        EventLoop {
+    ) -> ReplicaInstance {
+        ReplicaInstance {
             listener,
             client_connections,
             store,

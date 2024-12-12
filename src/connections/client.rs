@@ -3,11 +3,14 @@ use std::{cell::Cell, fs, net::TcpStream};
 use crate::{
     config::{Config, ReplicationRole},
     connections::parser::{BufferType, Command},
-    fmt::{format_array, format_string},
     store::Store,
 };
 
-use super::{stream::RedisStream, PollResult, ReplicationCheckRequest};
+use super::{
+    fmt::{format_array, format_string},
+    stream::RedisStream,
+    PollResult, ReplicationCheckRequest,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ConnectionRole {
@@ -370,12 +373,11 @@ impl ClientConnection {
             String::from("psync2"),
         ]);
         println!("Replication: sending PSYNC");
-        self.send_command(&vec![
+        self.send_string(&format_array(&vec![
             String::from("PSYNC"),
             String::from("?"),
             String::from("-1"),
-        ]);
-        self.poll(global_state, config);
+        ]));
 
         println!("Disabling blocking behavior of the TCP stream");
         self.stream.set_stream_nonblocking_behavior(true);
@@ -383,6 +385,7 @@ impl ClientConnection {
             replication_offset: 0,
             last_offset_checked: 0,
         });
+        self.poll(global_state, config);
 
         Some(())
     }

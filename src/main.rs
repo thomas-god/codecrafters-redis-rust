@@ -1,7 +1,7 @@
 // #![allow(unused_imports)]
 use config::{parse_config, Config, DBFile, ReplicationRole};
 use connections::client::ClientConnection;
-use event_loop::EventLoop;
+use instance::{master::MasterInstance, replica::ReplicaInstance};
 use store::Store;
 
 use std::{
@@ -11,8 +11,7 @@ use std::{
 
 pub mod config;
 pub mod connections;
-pub mod event_loop;
-pub mod fmt;
+pub mod instance;
 pub mod store;
 
 fn main() {
@@ -39,11 +38,13 @@ fn main() {
         }
         client_connections.push(connection);
         println!("Replication handshake done");
+
+        let mut instance = ReplicaInstance::new(listener, client_connections, store, config);
+        instance.run()
+    } else {
+        let mut instance = MasterInstance::new(listener, client_connections, store, config);
+        instance.run()
     }
-
-    let mut event_loop = EventLoop::new(listener, client_connections, store, config);
-
-    event_loop.run()
 }
 
 fn build_store(config: &Config) -> Store {
