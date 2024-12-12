@@ -17,7 +17,7 @@ pub mod store;
 fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_config();
-    let mut client_connections: Vec<ClientConnection> = Vec::new();
+    let client_connections: Vec<ClientConnection> = Vec::new();
     let mut store = Cell::new(build_store(&config));
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
@@ -29,17 +29,22 @@ fn main() {
         let Some(master_link) = TcpStream::connect(format!("{host}:{port}")).ok() else {
             panic!("Could not connect to master instance.");
         };
-        let mut connection = ClientConnection::new(master_link);
-        if connection
+        let mut master_connection = ClientConnection::new(master_link);
+        if master_connection
             .replication_handshake(&config, &mut store)
             .is_none()
         {
             println!("Error when doing the replication handshake");
         }
-        client_connections.push(connection);
         println!("Replication handshake done");
 
-        let mut instance = ReplicaInstance::new(listener, client_connections, store, config);
+        let mut instance = ReplicaInstance::new(
+            listener,
+            master_connection,
+            client_connections,
+            store,
+            config,
+        );
         instance.run()
     } else {
         let mut instance = MasterInstance::new(listener, client_connections, store, config);
