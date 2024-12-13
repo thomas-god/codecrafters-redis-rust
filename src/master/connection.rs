@@ -125,6 +125,7 @@ impl MasterToClientConnection {
             CommandVerb::ECHO => self.process_echo(cmd),
             CommandVerb::SET => self.process_set(cmd, global_state),
             CommandVerb::GET => self.process_get(cmd, global_state),
+            CommandVerb::TYPE => self.process_type(cmd, global_state),
             CommandVerb::CONFIG => self.process_config(cmd, config),
             CommandVerb::KEYS => self.process_keys(cmd, global_state),
             CommandVerb::INFO => self.process_info(cmd, config),
@@ -188,6 +189,21 @@ impl MasterToClientConnection {
         self.stream
             .send(&format_string(global_state.get_mut().get(key)));
         None
+    }
+
+    fn process_type(
+        &mut self,
+        command: &[String],
+        global_state: &mut Cell<Store>,
+    ) -> Option<PollResult> {
+        let key = command.get(1)?;
+        let Some(_key) = global_state.get_mut().get(key) else {
+            self.stream.send("+none\r\n");
+            return None;
+        };
+
+        self.stream.send("+string\r\n");
+        return None;
     }
 
     fn process_config(&mut self, command: &[String], config: &Config) -> Option<PollResult> {
