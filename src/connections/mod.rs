@@ -1,4 +1,3 @@
-pub mod client;
 pub mod fmt;
 pub mod parser;
 pub mod stream;

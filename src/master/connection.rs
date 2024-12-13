@@ -2,24 +2,22 @@ use std::{cell::Cell, fs, net::TcpStream};
 
 use crate::{
     config::{Config, ReplicationRole},
-    connections::parser::{BufferType, Command},
+    connections::{
+        fmt::{format_array, format_string},
+        parser::{BufferType, Command, CommandVerb},
+        stream::RedisStream,
+        PollResult, ReplicationCheckRequest,
+    },
     store::Store,
-};
-
-use super::{
-    fmt::{format_array, format_string},
-    stream::RedisStream,
-    PollResult, ReplicationCheckRequest,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ConnectionRole {
-    Master,
     Client,
     Replica,
 }
 
-pub struct ClientConnection {
+pub struct MasterToClientConnection {
     stream: RedisStream<TcpStream>,
     pub active: bool,
     pub connected_with: ConnectionRole,
@@ -47,13 +45,13 @@ impl Replication {
     }
 }
 
-impl ClientConnection {
-    pub fn new(stream: TcpStream) -> ClientConnection {
+impl MasterToClientConnection {
+    pub fn new(stream: TcpStream) -> MasterToClientConnection {
         stream
             .set_nonblocking(true)
             .expect("Cannot put TCP stream in non-blocking mode");
         let stream = RedisStream::new(stream);
-        ClientConnection {
+        MasterToClientConnection {
             stream,
             active: true,
             wait_for_replication_ack: false,
@@ -68,11 +66,10 @@ impl ClientConnection {
                 let mut poll_results: Vec<PollResult> = vec![];
                 for element in elements {
                     match element {
-                        BufferType::Command(Command { cmd, verb: _ }) => {
+                        BufferType::Command(cmd) => {
                             if let Some(result) = self.process_command(&cmd, global_state, config) {
                                 poll_results.push(result);
                             }
-                            self.track_replication_offset(cmd);
                         }
                         elem => println!("Nothing to do for: {elem:?}"),
                     }
@@ -96,23 +93,6 @@ impl ClientConnection {
         }
     }
 
-    fn track_replication_offset(&mut self, cmd: Vec<String>) {
-        let n_bytes = format_array(&cmd).len();
-        if let Some(Replication {
-            ref mut replication_offset,
-            last_offset_checked: _,
-        }) = self.replication
-        {
-            match cmd.first() {
-                Some(cmd) if cmd == "PING" || cmd == "SET" || cmd == "REPLCONF" => {
-                    *replication_offset += n_bytes;
-                    println!("New replication offset: {replication_offset}");
-                }
-                _ => {}
-            }
-        };
-    }
-
     pub fn send_command(&mut self, command: &Vec<String>) {
         let message = format_array(command);
         self.send_string(&message);
@@ -134,37 +114,27 @@ impl ClientConnection {
 
     fn process_command(
         &mut self,
-        cmd: &Vec<String>,
+        cmd: &Command,
         global_state: &mut Cell<Store>,
         config: &Config,
     ) -> Option<PollResult> {
         println!("Processing command: {cmd:?}");
-        if let Some(verb) = cmd.first() {
-            match verb.as_str() {
-                "PING" => self.process_ping(),
-                "ECHO" => self.process_echo(cmd),
-                "SET" => self.process_set(cmd, global_state),
-                "GET" => self.process_get(cmd, global_state),
-                "CONFIG" => self.process_config(cmd, config),
-                "KEYS" => self.process_keys(cmd, global_state),
-                "INFO" => self.process_info(cmd, config),
-                "REPLCONF" => self.process_replconf(cmd),
-                "PSYNC" => self.process_psync(config),
-                "WAIT" => self.process_wait(cmd),
-                v => {
-                    println!("Found invalid verb to process: {v}");
-                    None
-                }
-            }
-        } else {
-            None
+        let Command { verb, cmd } = cmd;
+        match verb {
+            CommandVerb::PING => self.process_ping(),
+            CommandVerb::ECHO => self.process_echo(cmd),
+            CommandVerb::SET => self.process_set(cmd, global_state),
+            CommandVerb::GET => self.process_get(cmd, global_state),
+            CommandVerb::CONFIG => self.process_config(cmd, config),
+            CommandVerb::KEYS => self.process_keys(cmd, global_state),
+            CommandVerb::INFO => self.process_info(cmd, config),
+            CommandVerb::REPLCONF => self.process_replconf(cmd),
+            CommandVerb::PSYNC => self.process_psync(config),
+            CommandVerb::WAIT => self.process_wait(cmd),
         }
     }
 
     fn process_ping(&mut self) -> Option<PollResult> {
-        if self.replication.is_some() {
-            return None;
-        };
         self.stream.send(&String::from("+PONG\r\n"));
         println!("Sending PONG back");
         None
@@ -277,33 +247,17 @@ impl ClientConnection {
 
     fn process_replconf(&mut self, command: &[String]) -> Option<PollResult> {
         match command.get(1) {
-            Some(option) if option == "GETACK" => {
-                let message = format_array(&vec![
-                    String::from("REPLCONF"),
-                    String::from("ACK"),
-                    format!(
-                        "{}",
-                        self.replication
-                            .as_ref()
-                            .map(|r| r.replication_offset)
-                            .unwrap_or(0)
-                    ),
-                ]);
-                println!("Sending {message:?}");
-                self.send_string(&message)
-            }
             Some(option) if option == "ACK" => {
                 if let Some(replication) = &mut self.replication {
                     replication.match_offsets();
                 }
-                return Some(PollResult::AckSuccessful);
+                Some(PollResult::AckSuccessful)
             }
             _ => {
                 self.send_string(&String::from("+OK\r\n"));
-                return None;
+                None
             }
-        };
-        None
+        }
     }
 
     fn process_psync(&mut self, config: &Config) -> Option<PollResult> {
@@ -343,50 +297,5 @@ impl ClientConnection {
             .as_ref()
             .map(|r| !r.need_to_ask_for_replication_ack())
             .unwrap_or(false)
-    }
-
-    pub fn replication_handshake(
-        &mut self,
-        config: &Config,
-        global_state: &mut Cell<Store>,
-    ) -> Option<()> {
-        let ReplicationRole::Replica((host, port)) = &config.replication.role else {
-            return None;
-        };
-        println!("Starting replication handshake with {host}:{port}");
-        println!("Enabling blocking behavior of the TCP stream");
-        self.stream.set_stream_nonblocking_behavior(false);
-
-        println!("Replication: sending PING");
-        self.send_command(&vec![String::from("PING")]);
-        println!("Replication: sending REPLCONF (1/2)");
-        self.send_command(&vec![
-            String::from("REPLCONF"),
-            String::from("listening-port"),
-            format!("{}", config.port),
-        ]);
-
-        println!("Replication: sending REPLCONF (2/2)");
-        self.send_command(&vec![
-            String::from("REPLCONF"),
-            String::from("capa"),
-            String::from("psync2"),
-        ]);
-        println!("Replication: sending PSYNC");
-        self.send_string(&format_array(&vec![
-            String::from("PSYNC"),
-            String::from("?"),
-            String::from("-1"),
-        ]));
-
-        println!("Disabling blocking behavior of the TCP stream");
-        self.stream.set_stream_nonblocking_behavior(true);
-        self.replication = Some(Replication {
-            replication_offset: 0,
-            last_offset_checked: 0,
-        });
-        self.poll(global_state, config);
-
-        Some(())
     }
 }

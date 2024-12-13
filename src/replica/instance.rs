@@ -1,11 +1,13 @@
 use std::{cell::Cell, io::ErrorKind, net::TcpListener};
 
-use crate::{config::Config, connections::client::ClientConnection, store::Store};
+use crate::{config::Config, store::Store};
+
+use super::connections::{client::ReplicaToClientConnection, master::ReplicaToMasterConnection};
 
 pub struct ReplicaInstance {
     listener: TcpListener,
-    master_connection: ClientConnection,
-    client_connections: Vec<ClientConnection>,
+    master_connection: ReplicaToMasterConnection,
+    client_connections: Vec<ReplicaToClientConnection>,
     store: Cell<Store>,
     config: Config,
 }
@@ -13,18 +15,18 @@ pub struct ReplicaInstance {
 impl ReplicaInstance {
     pub fn new(
         listener: TcpListener,
-        master_connection: ClientConnection,
-        client_connections: Vec<ClientConnection>,
-        store: Cell<Store>,
+        mut store: Cell<Store>,
         config: Config,
-    ) -> ReplicaInstance {
-        ReplicaInstance {
+    ) -> Option<ReplicaInstance> {
+        let master_connection = ReplicaToMasterConnection::new(&config, &mut store)?;
+
+        Some(ReplicaInstance {
             listener,
             master_connection,
-            client_connections,
+            client_connections: Vec::new(),
             store,
             config,
-        }
+        })
     }
 
     pub fn run(&mut self) -> ! {
@@ -39,7 +41,7 @@ impl ReplicaInstance {
     fn check_for_new_connections(&mut self) {
         match self.listener.accept() {
             Ok((stream, _)) => {
-                let connection = ClientConnection::new(stream);
+                let connection = ReplicaToClientConnection::new(stream);
                 self.client_connections.push(connection);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {

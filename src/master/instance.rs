@@ -7,17 +7,14 @@ use std::{
 
 use crate::{
     config::Config,
-    connections::{
-        client::{ClientConnection, ConnectionRole},
-        fmt::format_array,
-        PollResult, ReplicationCheckRequest,
-    },
+    connections::{fmt::format_array, PollResult, ReplicationCheckRequest},
+    master::connection::{ConnectionRole, MasterToClientConnection},
     store::Store,
 };
 
 pub struct MasterInstance {
     listener: TcpListener,
-    client_connections: Vec<ClientConnection>,
+    client_connections: Vec<MasterToClientConnection>,
     store: Cell<Store>,
     config: Config,
     replication_offset: usize,
@@ -25,15 +22,10 @@ pub struct MasterInstance {
 }
 
 impl MasterInstance {
-    pub fn new(
-        listener: TcpListener,
-        client_connections: Vec<ClientConnection>,
-        store: Cell<Store>,
-        config: Config,
-    ) -> MasterInstance {
+    pub fn new(listener: TcpListener, store: Cell<Store>, config: Config) -> MasterInstance {
         MasterInstance {
             listener,
-            client_connections,
+            client_connections: Vec::new(),
             store,
             config,
             replication_offset: 0,
@@ -55,7 +47,7 @@ impl MasterInstance {
     fn check_for_new_connections(&mut self) {
         match self.listener.accept() {
             Ok((stream, _)) => {
-                let connection = ClientConnection::new(stream);
+                let connection = MasterToClientConnection::new(stream);
                 self.client_connections.push(connection);
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
