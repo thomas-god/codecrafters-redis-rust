@@ -1,4 +1,6 @@
-use std::{cell::Cell, fs, net::TcpStream};
+use std::{cell::Cell, collections::HashMap, fs, net::TcpStream};
+
+use itertools::Itertools;
 
 use crate::{
     config::{Config, ReplicationRole},
@@ -8,7 +10,7 @@ use crate::{
         stream::RedisStream,
         PollResult, ReplicationCheckRequest,
     },
-    store::Store,
+    store::{Store, StoreType},
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -126,6 +128,7 @@ impl MasterToClientConnection {
             CommandVerb::SET => self.process_set(cmd, global_state),
             CommandVerb::GET => self.process_get(cmd, global_state),
             CommandVerb::TYPE => self.process_type(cmd, global_state),
+            CommandVerb::XADD => self.process_xadd(cmd, global_state),
             CommandVerb::CONFIG => self.process_config(cmd, config),
             CommandVerb::KEYS => self.process_keys(cmd, global_state),
             CommandVerb::INFO => self.process_info(cmd, config),
@@ -171,7 +174,7 @@ impl MasterToClientConnection {
         };
 
         println!("Setting {}: {}", key, value);
-        global_state.get_mut().set(key, value, ttl);
+        global_state.get_mut().set_string(key, value, ttl);
         if let ConnectionRole::Client = &self.connected_with {
             if self.replication.is_none() {
                 self.stream.send(&String::from("+OK\r\n"));
@@ -187,7 +190,7 @@ impl MasterToClientConnection {
     ) -> Option<PollResult> {
         let key = command.get(1)?;
         self.stream
-            .send(&format_string(global_state.get_mut().get(key)));
+            .send(&format_string(global_state.get_mut().get_string(key)));
         None
     }
 
@@ -197,13 +200,36 @@ impl MasterToClientConnection {
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
         let key = command.get(1)?;
-        let Some(_key) = global_state.get_mut().get(key) else {
-            self.stream.send("+none\r\n");
-            return None;
+        let response = match global_state.get_mut().get_type(key) {
+            None => "+none\r\n",
+            Some(StoreType::String) => "+string\r\n",
+            Some(StoreType::Stream) => "+stream\r\n",
         };
 
-        self.stream.send("+string\r\n");
-        return None;
+        self.stream.send(response);
+        None
+    }
+
+    fn process_xadd(
+        &mut self,
+        command: &[String],
+        global_state: &mut Cell<Store>,
+    ) -> Option<PollResult> {
+        let stream_key = command.get(1)?;
+        let entry_id: &String = command.get(2)?;
+
+        let entries: HashMap<String, String> = command[3..]
+            .iter()
+            .tuple_windows::<(_, _)>()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        global_state
+            .get_mut()
+            .set_stream(stream_key, entry_id, &entries, None);
+
+        self.send_string(&format!("+{entry_id}\r\n"));
+        None
     }
 
     fn process_config(&mut self, command: &[String], config: &Config) -> Option<PollResult> {

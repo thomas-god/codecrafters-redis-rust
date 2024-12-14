@@ -181,7 +181,7 @@ impl ReplicaToMasterConnection {
         };
 
         println!("Setting {}: {}", key, value);
-        global_state.get_mut().set(key, value, ttl);
+        global_state.get_mut().set_string(key, value, ttl);
         Some(PollResult::Write(format_array(&command.to_vec())))
     }
 
@@ -192,7 +192,7 @@ impl ReplicaToMasterConnection {
     ) -> Option<PollResult> {
         let key = command.get(1)?;
         self.stream
-            .send(&format_string(global_state.get_mut().get(key)));
+            .send(&format_string(global_state.get_mut().get_string(key)));
         None
     }
 

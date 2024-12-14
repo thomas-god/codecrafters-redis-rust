@@ -104,7 +104,7 @@ impl ReplicaToClientConnection {
     ) -> Option<PollResult> {
         let key = command.get(1)?;
         self.stream
-            .send(&format_string(global_state.get_mut().get(key)));
+            .send(&format_string(global_state.get_mut().get_string(key)));
         None
     }
 
