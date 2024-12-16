@@ -19,19 +19,16 @@ pub struct StreamEntryId {
 
 impl Ord for StreamEntryId {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.timestamp < other.timestamp {
-            return Ordering::Less;
-        } else if self.timestamp > other.timestamp {
-            return Ordering::Greater;
+        match (
+            self.timestamp.cmp(&other.timestamp),
+            self.sequence_number.cmp(&other.sequence_number),
+        ) {
+            (Ordering::Less, _) => Ordering::Less,
+            (Ordering::Greater, _) => Ordering::Greater,
+            (Ordering::Equal, Ordering::Less) => Ordering::Less,
+            (Ordering::Equal, Ordering::Greater) => Ordering::Greater,
+            (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
         }
-
-        if self.sequence_number < other.sequence_number {
-            return Ordering::Less;
-        } else if self.sequence_number > other.sequence_number {
-            return Ordering::Greater;
-        }
-
-        Ordering::Equal
     }
 }
 
@@ -170,7 +167,12 @@ impl Store {
             expiry: _,
         }) = self.store.get_mut(key)
         else {
-            if requested_id == (&StreamEntryId {timestamp: 0, sequence_number:0}) {
+            if requested_id
+                == (&StreamEntryId {
+                    timestamp: 0,
+                    sequence_number: 0,
+                })
+            {
                 return Err(AddStreamEntryError::GreaterThanZeroZero);
             }
             let item = Item {
@@ -190,7 +192,12 @@ impl Store {
 
         match id_request {
             RequestedStreamEntryId::Explicit(id) => {
-                if requested_id == (&StreamEntryId {timestamp: 0, sequence_number:0}) {
+                if requested_id
+                    == (&StreamEntryId {
+                        timestamp: 0,
+                        sequence_number: 0,
+                    })
+                {
                     return Err(AddStreamEntryError::GreaterThanZeroZero);
                 }
                 if id <= last_id {
