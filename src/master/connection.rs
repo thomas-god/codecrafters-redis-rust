@@ -10,7 +10,7 @@ use crate::{
         stream::RedisStream,
         PollResult, ReplicationCheckRequest,
     },
-    store::{Store, StoreType},
+    store::{RequestedStreamEntryId, Store, StoreType, StreamEntryId},
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -216,7 +216,7 @@ impl MasterToClientConnection {
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
         let stream_key = command.get(1)?;
-        let entry_id: &String = command.get(2)?;
+        let entry_id = parse_requested_stream_entry_id(command.get(2)?)?;
 
         let entries: HashMap<String, String> = command[3..]
             .iter()
@@ -224,11 +224,16 @@ impl MasterToClientConnection {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        global_state
+        match global_state
             .get_mut()
-            .set_stream(stream_key, entry_id, &entries, None);
-
-        self.send_string(&format!("+{entry_id}\r\n"));
+            .set_stream(stream_key, &entry_id, &entries, None)
+        {
+            Ok(entry_id) => {
+                println!("+{entry_id:?}\r\n");
+                self.send_string(&format!("+{entry_id}\r\n"))
+            }
+            Err(err) => self.send_string(&format!("-{err}\r\n")),
+        };
         None
     }
 
@@ -339,5 +344,69 @@ impl MasterToClientConnection {
             .as_ref()
             .map(|r| !r.need_to_ask_for_replication_ack())
             .unwrap_or(false)
+    }
+}
+
+fn parse_requested_stream_entry_id(arg: &str) -> Option<RequestedStreamEntryId> {
+    if arg == "*" {
+        return Some(RequestedStreamEntryId::AutoGenerate);
+    }
+
+    let (first, second) = arg.split_at_checked(arg.find("-")?)?;
+    let timestamp = first.parse::<usize>().ok()?;
+    let second = second.strip_prefix("-")?;
+
+    if second == "*" {
+        return Some(RequestedStreamEntryId::AutoGenerateSequence(timestamp));
+    }
+
+    let sequence_number = second.parse::<usize>().ok()?;
+    Some(RequestedStreamEntryId::Explicit(StreamEntryId {
+        timestamp,
+        sequence_number,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        master::connection::parse_requested_stream_entry_id,
+        store::{RequestedStreamEntryId, StreamEntryId},
+    };
+
+    #[test]
+    fn requested_stream_entry_id_invalid() {
+        let arg = String::from("toto");
+        assert_eq!(parse_requested_stream_entry_id(&arg), None);
+    }
+
+    #[test]
+    fn requested_stream_entry_id_auto_generate() {
+        let arg = String::from("*");
+        assert_eq!(
+            parse_requested_stream_entry_id(&arg),
+            Some(RequestedStreamEntryId::AutoGenerate)
+        );
+    }
+
+    #[test]
+    fn requested_stream_entry_id_auto_generate_sequence() {
+        let arg = String::from("1526919030474-*");
+        assert_eq!(
+            parse_requested_stream_entry_id(&arg),
+            Some(RequestedStreamEntryId::AutoGenerateSequence(1526919030474))
+        );
+    }
+
+    #[test]
+    fn requested_stream_entry_id_explicit() {
+        let arg = String::from("1526919030474-12");
+        assert_eq!(
+            parse_requested_stream_entry_id(&arg),
+            Some(RequestedStreamEntryId::Explicit(StreamEntryId {
+                timestamp: 1526919030474,
+                sequence_number: 12
+            }))
+        );
     }
 }

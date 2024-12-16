@@ -7,7 +7,6 @@ use crate::store::{Item, ItemType};
 use super::Store;
 
 impl Store {
-
     pub fn from_dbfile(dir: &str, dbname: &str) -> Option<Store> {
         let path = Path::new(dir).join(dbname);
         let mut content = fs::read(path).ok()?.into_iter();
