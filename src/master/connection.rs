@@ -230,7 +230,7 @@ impl MasterToClientConnection {
         {
             Ok(entry_id) => {
                 println!("+{entry_id:?}\r\n");
-                self.send_string(&format!("+{entry_id}\r\n"))
+                self.send_string(&format_string(Some(entry_id)))
             }
             Err(err) => self.send_string(&format!("-{err}\r\n")),
         };

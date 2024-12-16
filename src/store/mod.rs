@@ -191,7 +191,13 @@ impl Store {
                 timestamp: *timestamp,
                 sequence_number: if *timestamp == 0 { 1 } else { 0 },
             },
-            _ => todo!(),
+            RequestedStreamEntryId::AutoGenerate => {
+                let now = chrono::Utc::now().timestamp_millis();
+                &StreamEntryId {
+                    timestamp: usize::try_from(now).unwrap_or(0),
+                    sequence_number: if now == 0 { 1 } else { 0 },
+                }
+            }
         };
         let item = Item {
             value: ItemType::Stream(vec![StreamEntry {
@@ -276,7 +282,24 @@ fn append_to_existing_stream(
                 Ordering::Less => return Err(AddStreamEntryError::EqualOrSmallerID),
             }
         }
-        _ => todo!("not implemented yet"),
+        RequestedStreamEntryId::AutoGenerate => {
+            let now = usize::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
+            let last_entry = existing_stream.last().expect("Cannot be empty");
+            match now.cmp(&last_entry.id.timestamp) {
+                Ordering::Greater => StreamEntryId {
+                    timestamp: now,
+                    sequence_number: 0,
+                },
+                Ordering::Equal => StreamEntryId {
+                    timestamp: now,
+                    sequence_number: last_entry.id.sequence_number + 1,
+                },
+                Ordering::Less => StreamEntryId {
+                    timestamp: last_entry.id.timestamp,
+                    sequence_number: last_entry.id.sequence_number + 1,
+                },
+            }
+        }
     };
 
     existing_stream.push(StreamEntry {
