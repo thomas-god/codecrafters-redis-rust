@@ -226,7 +226,7 @@ impl MasterToClientConnection {
 
         match global_state
             .get_mut()
-            .set_stream(stream_key, &entry_id, &entries, None)
+            .add_stream_entry(stream_key, &entry_id, &entries, None)
         {
             Ok(entry_id) => {
                 println!("+{entry_id:?}\r\n");

@@ -148,51 +148,36 @@ impl Store {
         Some(value.clone())
     }
 
-    pub fn set_stream(
+    pub fn add_stream_entry(
         &mut self,
         key: &str,
         id_request: &RequestedStreamEntryId,
         entry: &HashMap<String, String>,
         ttl: Option<usize>,
     ) -> Result<String, AddStreamEntryError> {
-        let RequestedStreamEntryId::Explicit(requested_id) = id_request else {
-            return Err(AddStreamEntryError::EqualOrSmallerID);
-        };
         let expiry = ttl.and_then(|s| {
             Utc::now().checked_add_signed(TimeDelta::milliseconds(i64::try_from(s).ok()?))
         });
 
-        let Some(Item {
-            value: ItemType::Stream(existing_stream),
-            expiry: _,
-        }) = self.store.get_mut(key)
-        else {
-            if requested_id
-                == (&StreamEntryId {
-                    timestamp: 0,
-                    sequence_number: 0,
-                })
-            {
-                return Err(AddStreamEntryError::GreaterThanZeroZero);
-            }
-            let item = Item {
-                value: ItemType::Stream(vec![StreamEntry {
-                    id: requested_id.clone(),
-                    values: entry.clone(),
-                }]),
-                expiry,
-            };
-            self.store.insert(String::from(key), item);
-            return Ok(requested_id.to_string());
-        };
-        let last_id = existing_stream
-            .last()
-            .map(|entry| &entry.id)
-            .expect("Cannot be empty");
+        match self.store.get_mut(key) {
+            Some(Item {
+                value: ItemType::Stream(existing_stream),
+                expiry: _,
+            }) => append_to_existing_stream(existing_stream, id_request, entry),
+            _ => self.create_new_stream(key, id_request, entry, expiry),
+        }
+    }
 
-        match id_request {
+    fn create_new_stream(
+        &mut self,
+        key: &str,
+        id_request: &RequestedStreamEntryId,
+        entry: &HashMap<String, String>,
+        expiry: Option<DateTime<Utc>>,
+    ) -> Result<String, AddStreamEntryError> {
+        let id = match id_request {
             RequestedStreamEntryId::Explicit(id) => {
-                if requested_id
+                if id
                     == (&StreamEntryId {
                         timestamp: 0,
                         sequence_number: 0,
@@ -200,18 +185,23 @@ impl Store {
                 {
                     return Err(AddStreamEntryError::GreaterThanZeroZero);
                 }
-                if id <= last_id {
-                    return Err(AddStreamEntryError::EqualOrSmallerID);
-                }
+                id
             }
-            _ => todo!("not implemented yet"),
-        }
-
-        existing_stream.push(StreamEntry {
-            id: requested_id.clone(),
-            values: entry.clone(),
-        });
-        Ok(requested_id.to_string())
+            RequestedStreamEntryId::AutoGenerateSequence(timestamp) => &StreamEntryId {
+                timestamp: *timestamp,
+                sequence_number: if *timestamp == 0 { 1 } else { 0 },
+            },
+            _ => todo!(),
+        };
+        let item = Item {
+            value: ItemType::Stream(vec![StreamEntry {
+                id: id.clone(),
+                values: entry.clone(),
+            }]),
+            expiry,
+        };
+        self.store.insert(String::from(key), item);
+        Ok(id.to_string())
     }
 
     pub fn get_stream(&self, key: &str) -> Option<&Stream> {
@@ -245,6 +235,55 @@ impl Store {
             ItemType::String(_) => StoreType::String,
         })
     }
+}
+
+fn append_to_existing_stream(
+    existing_stream: &mut Vec<StreamEntry>,
+    id_request: &RequestedStreamEntryId,
+    entry: &HashMap<String, String>,
+) -> Result<String, AddStreamEntryError> {
+    let last_id = existing_stream
+        .last()
+        .map(|entry| &entry.id)
+        .expect("Cannot be empty");
+
+    let id = match id_request {
+        RequestedStreamEntryId::Explicit(id) => {
+            if id
+                == (&StreamEntryId {
+                    timestamp: 0,
+                    sequence_number: 0,
+                })
+            {
+                return Err(AddStreamEntryError::GreaterThanZeroZero);
+            }
+            if id <= last_id {
+                return Err(AddStreamEntryError::EqualOrSmallerID);
+            }
+            id.clone()
+        }
+        RequestedStreamEntryId::AutoGenerateSequence(timestamp) => {
+            let last_entry = existing_stream.last().expect("Cannot be empty");
+            match timestamp.cmp(&last_entry.id.timestamp) {
+                Ordering::Greater => StreamEntryId {
+                    timestamp: *timestamp,
+                    sequence_number: 0,
+                },
+                Ordering::Equal => StreamEntryId {
+                    timestamp: *timestamp,
+                    sequence_number: last_entry.id.sequence_number + 1,
+                },
+                Ordering::Less => return Err(AddStreamEntryError::EqualOrSmallerID),
+            }
+        }
+        _ => todo!("not implemented yet"),
+    };
+
+    existing_stream.push(StreamEntry {
+        id: id.clone(),
+        values: entry.clone(),
+    });
+    Ok(id.to_string())
 }
 
 #[cfg(test)]
@@ -300,7 +339,7 @@ mod tests {
         };
 
         assert_eq!(
-            store.set_stream(
+            store.add_stream_entry(
                 &String::from("toto"),
                 &RequestedStreamEntryId::Explicit(first_entry_id.clone()),
                 &first_entry,
@@ -327,7 +366,7 @@ mod tests {
         };
 
         assert_eq!(
-            store.set_stream(
+            store.add_stream_entry(
                 &String::from("toto"),
                 &RequestedStreamEntryId::Explicit(second_entry_id.clone()),
                 &second_entry,
@@ -379,7 +418,7 @@ mod tests {
             timestamp: 1,
             sequence_number: 0,
         };
-        let _ = store.set_stream(
+        let _ = store.add_stream_entry(
             &key,
             &RequestedStreamEntryId::Explicit(entry_id.clone()),
             &value,
@@ -407,7 +446,7 @@ mod tests {
             timestamp: 1,
             sequence_number: 1,
         };
-        let _ = store.set_stream(
+        let _ = store.add_stream_entry(
             &key,
             &RequestedStreamEntryId::Explicit(entry_id.clone()),
             &value,
@@ -415,7 +454,7 @@ mod tests {
         );
 
         // Another insert with same (timestamp, sequence_number)
-        let res = store.set_stream(
+        let res = store.add_stream_entry(
             &key,
             &RequestedStreamEntryId::Explicit(entry_id.clone()),
             &value,
@@ -438,7 +477,7 @@ mod tests {
             timestamp: 0,
             sequence_number: 0,
         };
-        let res = store.set_stream(
+        let res = store.add_stream_entry(
             &key,
             &RequestedStreamEntryId::Explicit(entry_id.clone()),
             &value,
