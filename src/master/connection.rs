@@ -10,7 +10,10 @@ use crate::{
         stream::RedisStream,
         PollResult, ReplicationCheckRequest,
     },
-    store::{RequestedStreamEntryId, Store, StoreType, StreamEntryId},
+    store::{
+        stream::{RequestedStreamEntryId, StreamEntryId},
+        Store, StoreType,
+    },
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -371,7 +374,7 @@ fn parse_requested_stream_entry_id(arg: &str) -> Option<RequestedStreamEntryId> 
 mod tests {
     use crate::{
         master::connection::parse_requested_stream_entry_id,
-        store::{RequestedStreamEntryId, StreamEntryId},
+        store::stream::{RequestedStreamEntryId, StreamEntryId},
     };
 
     #[test]
