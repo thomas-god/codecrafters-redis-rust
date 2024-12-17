@@ -390,6 +390,10 @@ fn parse_requested_stream_entry_id(arg: &str) -> Option<RequestedStreamEntryId> 
 }
 
 fn parse_stream_entry_id(arg: &str) -> Option<StreamEntryId> {
+    if arg == "+" || arg == "-" {
+        return None;
+    }
+
     let (first, second) = arg.split_at_checked(arg.find("-")?)?;
     let timestamp = first.parse::<usize>().ok()?;
 
