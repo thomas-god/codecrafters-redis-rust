@@ -1,18 +1,19 @@
-use std::{cell::Cell, collections::HashMap, fs, net::TcpStream};
+use std::{cell::Cell, fs, net::TcpStream};
 
+use indexmap::IndexMap;
 use itertools::Itertools;
 
 use crate::{
     config::{Config, ReplicationRole},
     connections::{
-        fmt::{format_array, format_string},
+        fmt::{format_array, format_stream, format_string},
         parser::{BufferType, Command, CommandVerb},
         stream::RedisStream,
         PollResult, ReplicationCheckRequest,
     },
     store::{
         stream::{RequestedStreamEntryId, StreamEntryId},
-        Store, StoreType,
+        ItemType, Store,
     },
 };
 
@@ -132,6 +133,7 @@ impl MasterToClientConnection {
             CommandVerb::GET => self.process_get(cmd, global_state),
             CommandVerb::TYPE => self.process_type(cmd, global_state),
             CommandVerb::XADD => self.process_xadd(cmd, global_state),
+            CommandVerb::XRANGE => self.process_xrange(cmd, global_state),
             CommandVerb::CONFIG => self.process_config(cmd, config),
             CommandVerb::KEYS => self.process_keys(cmd, global_state),
             CommandVerb::INFO => self.process_info(cmd, config),
@@ -203,10 +205,10 @@ impl MasterToClientConnection {
         global_state: &mut Cell<Store>,
     ) -> Option<PollResult> {
         let key = command.get(1)?;
-        let response = match global_state.get_mut().get_type(key) {
+        let response = match global_state.get_mut().get_item_type(key) {
             None => "+none\r\n",
-            Some(StoreType::String) => "+string\r\n",
-            Some(StoreType::Stream) => "+stream\r\n",
+            Some(ItemType::String) => "+string\r\n",
+            Some(ItemType::Stream) => "+stream\r\n",
         };
 
         self.stream.send(response);
@@ -221,7 +223,7 @@ impl MasterToClientConnection {
         let stream_key = command.get(1)?;
         let entry_id = parse_requested_stream_entry_id(command.get(2)?)?;
 
-        let entries: HashMap<String, String> = command[3..]
+        let entries: IndexMap<String, String> = command[3..]
             .iter()
             .tuple_windows::<(_, _)>()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -237,6 +239,23 @@ impl MasterToClientConnection {
             }
             Err(err) => self.send_string(&format!("-{err}\r\n")),
         };
+        None
+    }
+
+    fn process_xrange(
+        &mut self,
+        command: &[String],
+        global_state: &mut Cell<Store>,
+    ) -> Option<PollResult> {
+        let stream_key = command.get(1)?;
+        let start_id = command.get(2).and_then(|s| parse_stream_entry_id(s));
+        let end_id = command.get(3).and_then(|s| parse_stream_entry_id(s));
+
+        let stream =
+            global_state
+                .get_mut()
+                .get_stream_range(stream_key, start_id.as_ref(), end_id.as_ref());
+        self.send_string(&format_stream(&stream));
         None
     }
 
@@ -368,6 +387,17 @@ fn parse_requested_stream_entry_id(arg: &str) -> Option<RequestedStreamEntryId> 
         timestamp,
         sequence_number,
     }))
+}
+
+fn parse_stream_entry_id(arg: &str) -> Option<StreamEntryId> {
+    let (first, second) = arg.split_at_checked(arg.find("-")?)?;
+    let timestamp = first.parse::<usize>().ok()?;
+
+    let sequence_number = second.strip_prefix("-")?.parse::<usize>().ok()?;
+    Some(StreamEntryId {
+        timestamp,
+        sequence_number,
+    })
 }
 
 #[cfg(test)]

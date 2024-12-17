@@ -6,21 +6,21 @@ use stream::Stream;
 pub mod dbfile;
 pub mod stream;
 
+struct Item {
+    value: ValueType,
+    expiry: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
-enum ItemType {
+enum ValueType {
     String(String),
     Stream(Stream),
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum StoreType {
+pub enum ItemType {
     String,
     Stream,
-}
-
-struct Item {
-    value: ItemType,
-    expiry: Option<DateTime<Utc>>,
 }
 
 pub struct Store {
@@ -47,7 +47,7 @@ impl Store {
             Utc::now().checked_add_signed(TimeDelta::milliseconds(i64::try_from(s).ok()?))
         });
         let item = Item {
-            value: ItemType::String(String::from(value)),
+            value: ValueType::String(String::from(value)),
             expiry,
         };
         self.store.insert(String::from(key), item);
@@ -63,7 +63,7 @@ impl Store {
         }
 
         let Item {
-            value: ItemType::String(value),
+            value: ValueType::String(value),
             expiry: _,
         } = item
         else {
@@ -77,11 +77,11 @@ impl Store {
         self.store.keys().map(|key| key.to_string()).collect()
     }
 
-    pub fn get_type(&self, key: &str) -> Option<StoreType> {
+    pub fn get_item_type(&self, key: &str) -> Option<ItemType> {
         let item = self.store.get(key)?;
         Some(match item.value {
-            ItemType::Stream(_) => StoreType::Stream,
-            ItemType::String(_) => StoreType::String,
+            ValueType::Stream(_) => ItemType::Stream,
+            ValueType::String(_) => ItemType::String,
         })
     }
 }
@@ -89,11 +89,13 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use core::time;
-    use std::{collections::HashMap, thread};
+    use std::thread;
+
+    use indexmap::IndexMap;
 
     use crate::store::{
         stream::{RequestedStreamEntryId, StreamEntryId},
-        StoreType,
+        ItemType,
     };
 
     use super::Store;
@@ -129,22 +131,22 @@ mod tests {
         let mut store = Store::new();
 
         // No value for this key
-        assert_eq!(store.get_type(&String::from("no-key")), None);
+        assert_eq!(store.get_item_type(&String::from("no-key")), None);
 
         // String value
         let key = String::from("my-string");
         let value = String::from("tutu");
         store.set_string(&key, &value, Some(100));
 
-        if let Some(item_type) = store.get_type(&String::from("my-string")) {
-            assert_eq!(item_type, StoreType::String);
+        if let Some(item_type) = store.get_item_type(&String::from("my-string")) {
+            assert_eq!(item_type, ItemType::String);
         } else {
             panic!("Should not be None but Some(StoreType::String)")
         }
 
         // Stream value
         let key = String::from("my-stream");
-        let value = HashMap::from([
+        let value = IndexMap::from([
             (String::from("temperature"), String::from("10")),
             (String::from("humidity"), String::from("80")),
         ]);
@@ -154,13 +156,13 @@ mod tests {
         };
         let _ = store.add_stream_entry(
             &key,
-            &RequestedStreamEntryId::Explicit(entry_id.clone()),
+            &RequestedStreamEntryId::Explicit(entry_id),
             &value,
             Some(100),
         );
 
-        if let Some(item_type) = store.get_type(&String::from("my-stream")) {
-            assert_eq!(item_type, StoreType::Stream);
+        if let Some(item_type) = store.get_item_type(&String::from("my-stream")) {
+            assert_eq!(item_type, ItemType::Stream);
         } else {
             panic!("Should not be None but Some(StoreType::Stream)")
         }

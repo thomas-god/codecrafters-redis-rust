@@ -1,16 +1,17 @@
-use std::{cmp::Ordering, collections::HashMap, error::Error, fmt};
+use std::{cmp::Ordering, error::Error, fmt};
 
 use chrono::{DateTime, TimeDelta, Utc};
+use indexmap::IndexMap;
 
-use super::{Item, ItemType, Store};
+use super::{Item, Store, ValueType};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct StreamEntry {
     pub id: StreamEntryId,
-    pub values: HashMap<String, String>,
+    pub values: IndexMap<String, String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StreamEntryId {
     pub timestamp: usize,
     pub sequence_number: usize,
@@ -86,7 +87,7 @@ impl Store {
         &mut self,
         key: &str,
         id_request: &RequestedStreamEntryId,
-        entry: &HashMap<String, String>,
+        entry: &IndexMap<String, String>,
         ttl: Option<usize>,
     ) -> Result<String, AddStreamEntryError> {
         let expiry = ttl.and_then(|s| {
@@ -95,7 +96,7 @@ impl Store {
 
         match self.store.get_mut(key) {
             Some(Item {
-                value: ItemType::Stream(existing_stream),
+                value: ValueType::Stream(existing_stream),
                 expiry: _,
             }) => append_to_existing_stream(existing_stream, id_request, entry),
             _ => self.create_new_stream(key, id_request, entry, expiry),
@@ -106,7 +107,7 @@ impl Store {
         &mut self,
         key: &str,
         id_request: &RequestedStreamEntryId,
-        entry: &HashMap<String, String>,
+        entry: &IndexMap<String, String>,
         expiry: Option<DateTime<Utc>>,
     ) -> Result<String, AddStreamEntryError> {
         let id = match id_request {
@@ -134,8 +135,8 @@ impl Store {
             }
         };
         let item = Item {
-            value: ItemType::Stream(vec![StreamEntry {
-                id: id.clone(),
+            value: ValueType::Stream(vec![StreamEntry {
+                id: *id,
                 values: entry.clone(),
             }]),
             expiry,
@@ -144,7 +145,36 @@ impl Store {
         Ok(id.to_string())
     }
 
-    pub fn get_stream(&self, key: &str) -> Option<&Stream> {
+    pub fn get_stream_range(
+        &self,
+        key: &str,
+        start: Option<&StreamEntryId>,
+        end: Option<&StreamEntryId>,
+    ) -> Vec<StreamEntry> {
+        let Some(Item {
+            value: ValueType::Stream(stream),
+            expiry: _,
+        }) = self.store.get(key)
+        else {
+            return Vec::new();
+        };
+        let matching_entries: Vec<StreamEntry> = stream
+            .iter()
+            .filter(|entry| {
+                let start_condition = start.map(|start_id| entry.id >= *start_id).unwrap_or(true);
+                let end_condition = end.map(|end_id| entry.id <= *end_id).unwrap_or(true);
+                start_condition && end_condition
+            })
+            .map(|entry| StreamEntry {
+                id: entry.id,
+                values: entry.values.clone(),
+            })
+            .collect();
+        matching_entries
+    }
+
+    #[cfg(test)]
+    pub fn get_raw_stream(&self, key: &str) -> Option<&Stream> {
         let item = self.store.get(key)?;
 
         if let Some(expiry) = item.expiry {
@@ -154,7 +184,7 @@ impl Store {
         }
 
         let Item {
-            value: ItemType::Stream(stream),
+            value: ValueType::Stream(stream),
             expiry: _,
         } = item
         else {
@@ -168,7 +198,7 @@ impl Store {
 fn append_to_existing_stream(
     existing_stream: &mut Vec<StreamEntry>,
     id_request: &RequestedStreamEntryId,
-    entry: &HashMap<String, String>,
+    entry: &IndexMap<String, String>,
 ) -> Result<String, AddStreamEntryError> {
     let last_id = existing_stream
         .last()
@@ -188,7 +218,7 @@ fn append_to_existing_stream(
             if id <= last_id {
                 return Err(AddStreamEntryError::EqualOrSmallerID);
             }
-            id.clone()
+            *id
         }
         RequestedStreamEntryId::AutoGenerateSequence(timestamp) => {
             let last_entry = existing_stream.last().expect("Cannot be empty");
@@ -225,7 +255,7 @@ fn append_to_existing_stream(
     };
 
     existing_stream.push(StreamEntry {
-        id: id.clone(),
+        id,
         values: entry.clone(),
     });
     Ok(id.to_string())
@@ -233,7 +263,7 @@ fn append_to_existing_stream(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     use crate::store::{
         stream::{AddStreamEntryError, RequestedStreamEntryId, StreamEntry, StreamEntryId},
@@ -244,9 +274,9 @@ mod tests {
     fn set_and_get_stream() {
         let mut store = Store::new();
 
-        assert_eq!(store.get_stream(&String::from("toto")), None);
+        assert_eq!(store.get_raw_stream(&String::from("toto")), None);
 
-        let first_entry = HashMap::from([
+        let first_entry = IndexMap::from([
             (String::from("temperature"), String::from("10")),
             (String::from("humidity"), String::from("80")),
         ]);
@@ -258,7 +288,7 @@ mod tests {
         assert_eq!(
             store.add_stream_entry(
                 &String::from("toto"),
-                &RequestedStreamEntryId::Explicit(first_entry_id.clone()),
+                &RequestedStreamEntryId::Explicit(first_entry_id),
                 &first_entry,
                 None
             ),
@@ -266,14 +296,14 @@ mod tests {
         );
 
         assert_eq!(
-            store.get_stream(&String::from("toto")),
+            store.get_raw_stream(&String::from("toto")),
             Some(&vec![StreamEntry {
-                id: first_entry_id.clone(),
+                id: first_entry_id,
                 values: first_entry.clone()
             }])
         );
 
-        let second_entry = HashMap::from([
+        let second_entry = IndexMap::from([
             (String::from("temperature"), String::from("12")),
             (String::from("humidity"), String::from("99")),
         ]);
@@ -285,7 +315,7 @@ mod tests {
         assert_eq!(
             store.add_stream_entry(
                 &String::from("toto"),
-                &RequestedStreamEntryId::Explicit(second_entry_id.clone()),
+                &RequestedStreamEntryId::Explicit(second_entry_id),
                 &second_entry,
                 None
             ),
@@ -293,10 +323,10 @@ mod tests {
         );
 
         assert_eq!(
-            store.get_stream(&String::from("toto")),
+            store.get_raw_stream(&String::from("toto")),
             Some(&vec![
                 StreamEntry {
-                    id: first_entry_id.clone(),
+                    id: first_entry_id,
                     values: first_entry
                 },
                 StreamEntry {
@@ -313,7 +343,7 @@ mod tests {
 
         // First insert
         let key = String::from("my-stream");
-        let value = HashMap::from([
+        let value = IndexMap::from([
             (String::from("temperature"), String::from("10")),
             (String::from("humidity"), String::from("80")),
         ]);
@@ -323,7 +353,7 @@ mod tests {
         };
         let _ = store.add_stream_entry(
             &key,
-            &RequestedStreamEntryId::Explicit(entry_id.clone()),
+            &RequestedStreamEntryId::Explicit(entry_id),
             &value,
             Some(100),
         );
@@ -331,7 +361,7 @@ mod tests {
         // Another insert with same (timestamp, sequence_number)
         let res = store.add_stream_entry(
             &key,
-            &RequestedStreamEntryId::Explicit(entry_id.clone()),
+            &RequestedStreamEntryId::Explicit(entry_id),
             &value,
             Some(100),
         );
@@ -344,7 +374,7 @@ mod tests {
         let mut store = Store::new();
 
         let key = String::from("my-stream");
-        let value = HashMap::from([
+        let value = IndexMap::from([
             (String::from("temperature"), String::from("10")),
             (String::from("humidity"), String::from("80")),
         ]);
@@ -354,11 +384,18 @@ mod tests {
         };
         let res = store.add_stream_entry(
             &key,
-            &RequestedStreamEntryId::Explicit(entry_id.clone()),
+            &RequestedStreamEntryId::Explicit(entry_id),
             &value,
             Some(100),
         );
 
         assert_eq!(res, Err(AddStreamEntryError::GreaterThanZeroZero));
+    }
+
+    #[test]
+    fn get_empty_range() {
+        let store = Store::new();
+
+        assert_eq!(store.get_stream_range("my-key", None, None), Vec::new());
     }
 }

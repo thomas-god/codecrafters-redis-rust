@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs, path::Path};
 
 use chrono::{DateTime, Utc};
 
-use crate::store::{Item, ItemType};
+use crate::store::{Item, ValueType};
 
 use super::Store;
 
@@ -39,7 +39,7 @@ impl Store {
                         store.insert(
                             key,
                             Item {
-                                value: ItemType::String(value),
+                                value: ValueType::String(value),
                                 expiry,
                             },
                         );
