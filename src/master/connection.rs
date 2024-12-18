@@ -134,6 +134,7 @@ impl MasterToClientConnection {
             CommandVerb::TYPE => self.process_type(cmd, global_state),
             CommandVerb::XADD => self.process_xadd(cmd, global_state),
             CommandVerb::XRANGE => self.process_xrange(cmd, global_state),
+            CommandVerb::XREAD => self.process_xread(cmd, global_state),
             CommandVerb::CONFIG => self.process_config(cmd, config),
             CommandVerb::KEYS => self.process_keys(cmd, global_state),
             CommandVerb::INFO => self.process_info(cmd, config),
@@ -256,6 +257,31 @@ impl MasterToClientConnection {
                 .get_mut()
                 .get_stream_range(stream_key, start_id.as_ref(), end_id.as_ref());
         self.send_string(&format_stream(&stream));
+        None
+    }
+
+    fn process_xread(
+        &mut self,
+        command: &[String],
+        global_state: &mut Cell<Store>,
+    ) -> Option<PollResult> {
+        let option = command.get(1)?;
+        if option != "streams" {
+            return None;
+        }
+        let stream_key = command.get(2)?;
+        let start_id = command.get(3).and_then(|s| parse_stream_entry_id(s));
+        let end_id = None;
+
+        let stream = global_state
+            .get_mut()
+            .get_stream_range(stream_key, start_id.as_ref(), end_id);
+        let message = format!(
+            "*1\r\n*2\r\n{}{}",
+            format_string(Some(stream_key.clone())),
+            format_stream(&stream)
+        );
+        self.send_string(&message);
         None
     }
 
