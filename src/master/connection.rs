@@ -283,21 +283,6 @@ impl MasterToClientConnection {
         }
         self.send_string(&message);
         None
-
-        // let stream_key = command.get(2)?;
-        // let start_id = command.get(3).and_then(|s| parse_stream_entry_id(s));
-        // let end_id = None;
-
-        // let stream = global_state
-        //     .get_mut()
-        //     .get_stream_range(stream_key, start_id.as_ref(), end_id);
-        // let message = format!(
-        //     "*1\r\n*2\r\n{}{}",
-        //     format_string(Some(stream_key.clone())),
-        //     format_stream(&stream)
-        // );
-        // self.send_string(&message);
-        // None
     }
 
     fn process_config(&mut self, command: &[String], config: &Config) -> Option<PollResult> {
@@ -453,7 +438,6 @@ fn parse_xread_streams_names(cmd: &[String]) -> Vec<(String, Option<StreamEntryI
 
     zip(names, ids)
         .map(|(name, id)| {
-            println!("{name}, {id}");
             (name.clone(), parse_stream_entry_id(id))
         })
         .collect()
