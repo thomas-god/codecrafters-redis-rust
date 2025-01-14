@@ -1,4 +1,4 @@
-use std::{cell::Cell, fs, net::TcpStream};
+use std::{cell::Cell, fs, iter::zip, net::TcpStream};
 
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -269,20 +269,35 @@ impl MasterToClientConnection {
         if option != "streams" {
             return None;
         }
-        let stream_key = command.get(2)?;
-        let start_id = command.get(3).and_then(|s| parse_stream_entry_id(s));
-        let end_id = None;
-
-        let stream = global_state
-            .get_mut()
-            .get_stream_range(stream_key, start_id.as_ref(), end_id);
-        let message = format!(
-            "*1\r\n*2\r\n{}{}",
-            format_string(Some(stream_key.clone())),
-            format_stream(&stream)
-        );
+        let streams = parse_xread_streams_names(command);
+        let mut message = format!("*{}\r\n", streams.len());
+        for (stream, id) in streams {
+            let stream_values = global_state
+                .get_mut()
+                .get_stream_range(&stream, id.as_ref(), None);
+            message.push_str(&format!(
+                "*2\r\n{}{}",
+                format_string(Some(stream.clone())),
+                format_stream(&stream_values)
+            ));
+        }
         self.send_string(&message);
         None
+
+        // let stream_key = command.get(2)?;
+        // let start_id = command.get(3).and_then(|s| parse_stream_entry_id(s));
+        // let end_id = None;
+
+        // let stream = global_state
+        //     .get_mut()
+        //     .get_stream_range(stream_key, start_id.as_ref(), end_id);
+        // let message = format!(
+        //     "*1\r\n*2\r\n{}{}",
+        //     format_string(Some(stream_key.clone())),
+        //     format_stream(&stream)
+        // );
+        // self.send_string(&message);
+        // None
     }
 
     fn process_config(&mut self, command: &[String], config: &Config) -> Option<PollResult> {
@@ -430,10 +445,24 @@ fn parse_stream_entry_id(arg: &str) -> Option<StreamEntryId> {
     })
 }
 
+fn parse_xread_streams_names(cmd: &[String]) -> Vec<(String, Option<StreamEntryId>)> {
+    let cmd = &cmd[2..];
+    let midpoint = cmd.len() / 2;
+    let names = cmd[..midpoint].iter();
+    let ids = cmd[midpoint..].iter();
+
+    zip(names, ids)
+        .map(|(name, id)| {
+            println!("{name}, {id}");
+            (name.clone(), parse_stream_entry_id(id))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        master::connection::parse_requested_stream_entry_id,
+        master::connection::{parse_requested_stream_entry_id, parse_xread_streams_names},
         store::stream::{RequestedStreamEntryId, StreamEntryId},
     };
 
@@ -471,5 +500,32 @@ mod tests {
                 sequence_number: 12
             }))
         );
+    }
+
+    #[test]
+    fn parse_xread_command() {
+        let cmd: Vec<String> = String::from("XREAD streams stream_key other_stream_key 0-0 0-1")
+            .split(" ")
+            .map(|s| s.to_string())
+            .collect();
+
+        let res = parse_xread_streams_names(&cmd);
+        let expected_res = vec![
+            (
+                String::from("stream_key"),
+                Some(StreamEntryId {
+                    timestamp: 0,
+                    sequence_number: 0,
+                }),
+            ),
+            (
+                String::from("other_stream_key"),
+                Some(StreamEntryId {
+                    timestamp: 0,
+                    sequence_number: 1,
+                }),
+            ),
+        ];
+        assert_eq!(res, expected_res)
     }
 }
