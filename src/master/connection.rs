@@ -1,4 +1,4 @@
-use std::{cell::Cell, fs, iter::zip, net::TcpStream};
+use std::{cell::Cell, fmt::Debug, fs, iter::zip, net::TcpStream};
 
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -9,10 +9,10 @@ use crate::{
         fmt::{format_array, format_stream, format_string},
         parser::{BufferType, Command, CommandVerb},
         stream::RedisStream,
-        PollResult, ReplicationCheckRequest,
+        PollResult, ReplicationCheckRequest, WriteToStream,
     },
     store::{
-        stream::{RequestedStreamEntryId, StreamEntryId},
+        stream::{RequestedStreamEntryId, StreamEntry, StreamEntryId},
         ItemType, Store,
     },
 };
@@ -236,7 +236,14 @@ impl MasterToClientConnection {
         {
             Ok(entry_id) => {
                 println!("+{entry_id:?}\r\n");
-                self.send_string(&format_string(Some(entry_id)))
+                self.send_string(&format_string(Some(format!("{entry_id}"))));
+                return Some(PollResult::WriteToStream(WriteToStream {
+                    key: stream_key.to_owned(),
+                    entry: StreamEntry {
+                        id: entry_id,
+                        values: entries,
+                    },
+                }));
             }
             Err(err) => self.send_string(&format!("-{err}\r\n")),
         };
@@ -437,9 +444,7 @@ fn parse_xread_streams_names(cmd: &[String]) -> Vec<(String, Option<StreamEntryI
     let ids = cmd[midpoint..].iter();
 
     zip(names, ids)
-        .map(|(name, id)| {
-            (name.clone(), parse_stream_entry_id(id))
-        })
+        .map(|(name, id)| (name.clone(), parse_stream_entry_id(id)))
         .collect()
 }
 

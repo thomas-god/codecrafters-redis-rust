@@ -89,7 +89,7 @@ impl Store {
         id_request: &RequestedStreamEntryId,
         entry: &IndexMap<String, String>,
         ttl: Option<usize>,
-    ) -> Result<String, AddStreamEntryError> {
+    ) -> Result<StreamEntryId, AddStreamEntryError> {
         let expiry = ttl.and_then(|s| {
             Utc::now().checked_add_signed(TimeDelta::milliseconds(i64::try_from(s).ok()?))
         });
@@ -109,7 +109,7 @@ impl Store {
         id_request: &RequestedStreamEntryId,
         entry: &IndexMap<String, String>,
         expiry: Option<DateTime<Utc>>,
-    ) -> Result<String, AddStreamEntryError> {
+    ) -> Result<StreamEntryId, AddStreamEntryError> {
         let id = match id_request {
             RequestedStreamEntryId::Explicit(id) => {
                 if id
@@ -142,7 +142,7 @@ impl Store {
             expiry,
         };
         self.store.insert(String::from(key), item);
-        Ok(id.to_string())
+        Ok(id.to_owned())
     }
 
     pub fn get_stream_range(
@@ -199,7 +199,7 @@ fn append_to_existing_stream(
     existing_stream: &mut Vec<StreamEntry>,
     id_request: &RequestedStreamEntryId,
     entry: &IndexMap<String, String>,
-) -> Result<String, AddStreamEntryError> {
+) -> Result<StreamEntryId, AddStreamEntryError> {
     let last_id = existing_stream
         .last()
         .map(|entry| &entry.id)
@@ -258,7 +258,7 @@ fn append_to_existing_stream(
         id,
         values: entry.clone(),
     });
-    Ok(id.to_string())
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -292,7 +292,10 @@ mod tests {
                 &first_entry,
                 None
             ),
-            Ok(String::from("0-1"))
+            Ok(StreamEntryId {
+                timestamp: 0,
+                sequence_number: 1
+            })
         );
 
         assert_eq!(
@@ -319,7 +322,10 @@ mod tests {
                 &second_entry,
                 None
             ),
-            Ok(String::from("0-2"))
+            Ok(StreamEntryId {
+                timestamp: 0,
+                sequence_number: 2
+            })
         );
 
         assert_eq!(
