@@ -16,7 +16,7 @@ use crate::{
         parser::{BufferType, Command, CommandVerb},
     },
     store::{
-        stream::{RequestedStreamEntryId, StreamEntryId},
+        stream::{RequestedStreamEntryId, StreamEntry, StreamEntryId},
         ItemType, Store,
     },
 };
@@ -40,6 +40,12 @@ struct WaitForReplicationAcks {
     timeout: Option<Instant>,
 }
 
+struct BlockingXREAD {
+    initial_client_tx: Sender<ConnectionMessage>,
+    streams: Vec<String>,
+    timeout: Instant,
+}
+
 pub struct MasterActor {
     store: Store,
     config: Config,
@@ -48,12 +54,14 @@ pub struct MasterActor {
     replication: Replication,
     replicas: Vec<Sender<ConnectionMessage>>,
     wait_for_replication_acks: Option<WaitForReplicationAcks>,
+    blocking_xreads: Vec<BlockingXREAD>,
 }
 
 impl MasterActor {
     pub fn new(store: Store, config: Config) -> MasterActor {
         let (tx, rx) = channel();
         let replicas: Vec<Sender<ConnectionMessage>> = vec![];
+        let blocking_xreads: Vec<BlockingXREAD> = Vec::new();
 
         MasterActor {
             store,
@@ -62,6 +70,7 @@ impl MasterActor {
             rx,
             replication: Replication::default(),
             replicas,
+            blocking_xreads,
             wait_for_replication_acks: None,
         }
     }
@@ -81,6 +90,7 @@ impl MasterActor {
         }
 
         self.check_on_replication_waits();
+        self.check_on_blocking_xreads();
     }
 
     pub fn get_tx(&self) -> Sender<StoreMessage> {
@@ -198,19 +208,12 @@ impl MasterActor {
             .add_stream_entry(stream_key, &entry_id, &entries, None)
         {
             Ok(entry_id) => {
-                println!("+{entry_id:?}\r\n");
                 tx_back
                     .send(ConnectionMessage::SendString(format_string(Some(format!(
                         "{entry_id}"
                     )))))
                     .unwrap();
-                // return Some(PollResult::WriteToStream(WriteToStream {
-                //     key: stream_key.to_owned(),
-                //     entry: StreamEntry {
-                //         id: entry_id,
-                //         values: entries,
-                //     },
-                // }));
+                self.propagate_xadd(stream_key, &entry_id, &entries);
             }
             Err(err) => {
                 tx_back
@@ -218,6 +221,31 @@ impl MasterActor {
                     .unwrap();
             }
         };
+    }
+
+    fn propagate_xadd(
+        &mut self,
+        stream_key: &str,
+        entry_id: &StreamEntryId,
+        entries: &IndexMap<String, String>,
+    ) {
+        for task in self
+            .blocking_xreads
+            .iter()
+            .filter(|task| task.streams.contains(&stream_key.to_owned()))
+        {
+            println!("Propagating XADD for {stream_key}, {entry_id}");
+            task.initial_client_tx
+                .send(ConnectionMessage::SendString(format!(
+                    "*1\r\n*2\r\n{}{}",
+                    format_string(Some(stream_key.to_owned())),
+                    format_stream(&vec![StreamEntry {
+                        id: *entry_id,
+                        values: entries.clone()
+                    }])
+                )))
+                .unwrap();
+        }
     }
 
     fn process_xrange(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
@@ -236,15 +264,11 @@ impl MasterActor {
     }
 
     fn process_xread(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
-        let Some(option) = command.get(1) else {
+        let Some(XREADArguments { block_for, streams }) = parse_xread_arguments(command) else {
             return;
         };
-        if option != "streams" {
-            return;
-        }
-        let streams = parse_xread_streams_names(command);
         let mut message = format!("*{}\r\n", streams.len());
-        for (stream, id) in streams {
+        for (stream, id) in &streams {
             let stream_values = self.store.get_stream_range(&stream, id.as_ref(), None);
             message.push_str(&format!(
                 "*2\r\n{}{}",
@@ -252,9 +276,20 @@ impl MasterActor {
                 format_stream(&stream_values)
             ));
         }
-        tx_back
-            .send(ConnectionMessage::SendString(message))
-            .unwrap();
+
+        // Keep track to propagate futur XADD commands
+        if let Some(block_for) = block_for {
+            let timeout = Instant::now() + Duration::from_millis(block_for.try_into().unwrap());
+            self.blocking_xreads.push(BlockingXREAD {
+                initial_client_tx: tx_back.clone(),
+                streams: streams.into_iter().map(|stream| stream.0).collect(),
+                timeout,
+            });
+        } else {
+            tx_back
+                .send(ConnectionMessage::SendString(message))
+                .unwrap();
+        }
     }
 
     fn process_config(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
@@ -439,6 +474,14 @@ impl MasterActor {
             self.wait_for_replication_acks = None;
         }
     }
+
+    fn check_on_blocking_xreads(&self) {
+        for task in &self.blocking_xreads {
+            if task.timeout <= Instant::now() {
+                task.initial_client_tx.send(ConnectionMessage::SendString("$-1\r\n".to_owned())).unwrap();
+            }
+        }
+    }
 }
 
 fn parse_requested_stream_entry_id(arg: &String) -> Option<RequestedStreamEntryId> {
@@ -476,23 +519,50 @@ fn parse_stream_entry_id(arg: &str) -> Option<StreamEntryId> {
     })
 }
 
-fn parse_xread_streams_names(cmd: &[String]) -> Vec<(String, Option<StreamEntryId>)> {
-    let cmd = &cmd[2..];
+#[derive(PartialEq, Debug)]
+struct XREADArguments {
+    streams: Vec<(String, Option<StreamEntryId>)>,
+    block_for: Option<usize>,
+}
+
+fn parse_xread_arguments(cmd: &[String]) -> Option<XREADArguments> {
+    let mut iter = cmd[1..].iter();
+
+    let mut option = iter.next()?;
+    let timeout = if option == "block" {
+        let timeout = iter.next().and_then(|t| t.as_str().parse::<usize>().ok());
+        option = iter.next()?;
+        timeout
+    } else {
+        None
+    };
+    if option != "streams" {
+        return None;
+    }
+    let cmd = iter.as_slice();
     let midpoint = cmd.len() / 2;
     let names = cmd[..midpoint].iter();
     let ids = cmd[midpoint..].iter();
 
-    zip(names, ids)
+    let streams: Vec<(String, Option<StreamEntryId>)> = zip(names, ids)
         .map(|(name, id)| (name.clone(), parse_stream_entry_id(id)))
-        .collect()
+        .collect();
+
+    Some(XREADArguments {
+        streams,
+        block_for: timeout,
+    })
+    // Check for optionnal block timeout (ms)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        actor::stores::master::{parse_requested_stream_entry_id, parse_xread_streams_names},
+        actor::stores::master::parse_requested_stream_entry_id,
         store::stream::{RequestedStreamEntryId, StreamEntryId},
     };
+
+    use super::{parse_xread_arguments, XREADArguments};
 
     #[test]
     fn requested_stream_entry_id_invalid() {
@@ -531,29 +601,73 @@ mod tests {
     }
 
     #[test]
-    fn parse_xread_command() {
+    fn test_parse_xread_arguments() {
         let cmd: Vec<String> = String::from("XREAD streams stream_key other_stream_key 0-0 0-1")
             .split(" ")
             .map(|s| s.to_string())
             .collect();
 
-        let res = parse_xread_streams_names(&cmd);
-        let expected_res = vec![
-            (
-                String::from("stream_key"),
-                Some(StreamEntryId {
-                    timestamp: 0,
-                    sequence_number: 0,
-                }),
-            ),
-            (
-                String::from("other_stream_key"),
-                Some(StreamEntryId {
-                    timestamp: 0,
-                    sequence_number: 1,
-                }),
-            ),
-        ];
-        assert_eq!(res, expected_res)
+        let res = parse_xread_arguments(&cmd);
+        let expected_res = Some(XREADArguments {
+            streams: vec![
+                (
+                    String::from("stream_key"),
+                    Some(StreamEntryId {
+                        timestamp: 0,
+                        sequence_number: 0,
+                    }),
+                ),
+                (
+                    String::from("other_stream_key"),
+                    Some(StreamEntryId {
+                        timestamp: 0,
+                        sequence_number: 1,
+                    }),
+                ),
+            ],
+            block_for: None,
+        });
+        assert_eq!(res, expected_res);
+    }
+
+    #[test]
+    fn test_parse_xread_arguments_blocking() {
+        let cmd: Vec<String> =
+            String::from("XREAD block 1000 streams stream_key other_stream_key 0-0 0-1")
+                .split(" ")
+                .map(|s| s.to_string())
+                .collect();
+
+        let res = parse_xread_arguments(&cmd);
+        let expected_res = Some(XREADArguments {
+            streams: vec![
+                (
+                    String::from("stream_key"),
+                    Some(StreamEntryId {
+                        timestamp: 0,
+                        sequence_number: 0,
+                    }),
+                ),
+                (
+                    String::from("other_stream_key"),
+                    Some(StreamEntryId {
+                        timestamp: 0,
+                        sequence_number: 1,
+                    }),
+                ),
+            ],
+            block_for: Some(1000),
+        });
+        assert_eq!(res, expected_res);
+    }
+
+    #[test]
+    fn test_parse_xread_arguments_missing_streams() {
+        let cmd: Vec<String> = String::from("XREAD stream_key other_stream_key 0-0 0-1")
+            .split(" ")
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(parse_xread_arguments(&cmd), None);
     }
 }
