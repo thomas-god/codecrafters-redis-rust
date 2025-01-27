@@ -475,12 +475,16 @@ impl MasterActor {
         }
     }
 
-    fn check_on_blocking_xreads(&self) {
-        for task in &self.blocking_xreads {
+    fn check_on_blocking_xreads(&mut self) {
+        self.blocking_xreads.retain(|task| {
             if task.timeout <= Instant::now() {
-                task.initial_client_tx.send(ConnectionMessage::SendString("$-1\r\n".to_owned())).unwrap();
+                task.initial_client_tx
+                    .send(ConnectionMessage::SendString("$-1\r\n".to_owned()))
+                    .unwrap();
+                return false;
             }
-        }
+            return true;
+        });
     }
 }
 
