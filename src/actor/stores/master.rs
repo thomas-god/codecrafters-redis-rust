@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Replication {
     replication_offset: usize,
     last_offset_checked: usize,
@@ -30,15 +30,6 @@ struct Replication {
 impl Replication {
     fn match_offsets(&mut self) {
         self.last_offset_checked = self.replication_offset;
-    }
-}
-
-impl Default for Replication {
-    fn default() -> Self {
-        Replication {
-            replication_offset: 0,
-            last_offset_checked: 0,
-        }
     }
 }
 
@@ -192,11 +183,7 @@ impl MasterActor {
         let Some(stream_key) = command.get(1) else {
             return;
         };
-        let Some(entry_id) = command
-            .get(2)
-            .map(parse_requested_stream_entry_id)
-            .flatten()
-        else {
+        let Some(entry_id) = command.get(2).and_then(parse_requested_stream_entry_id) else {
             return;
         };
 

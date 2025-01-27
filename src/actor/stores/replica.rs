@@ -42,16 +42,14 @@ impl ReplicaActor {
 
     pub fn poll(&mut self) {
         while let Ok(message) = self.rx_master.try_recv() {
-            match message {
-                StoreMessage::NewBuffer {
-                    value: BufferType::Command(cmd),
-                    tx_back,
-                } => {
-                    println!("{cmd:?}");
-                    self.process_command(&cmd, tx_back);
-                    self.track_replication_offset(cmd.cmd);
-                }
-                _ => {}
+            if let StoreMessage::NewBuffer {
+                value: BufferType::Command(cmd),
+                tx_back,
+            } = message
+            {
+                println!("{cmd:?}");
+                self.process_command(&cmd, tx_back);
+                self.track_replication_offset(cmd.cmd);
             }
         }
         while let Ok(message) = self.rx_clients.try_recv() {

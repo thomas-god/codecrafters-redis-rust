@@ -29,8 +29,7 @@ pub enum ConnectionMessage {
     SendBytes(Vec<u8>),
 }
 
-pub fn main_actor() {
-    println!("Logs from your program will appear here!");
+pub fn build_and_run_replica() {
     let config = parse_config();
     let store = build_store(&config);
 
@@ -56,8 +55,7 @@ pub fn main_actor() {
     }
 }
 
-pub fn main_actor_replica() {
-    println!("Logs from your program will appear here!");
+pub fn build_and_run_master() {
     let config = parse_config();
     let store = build_store(&config);
 

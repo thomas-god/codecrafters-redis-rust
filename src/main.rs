@@ -1,11 +1,7 @@
 // #![allow(unused_imports)]
-use actor::{main_actor, main_actor_replica};
+use actor::{build_and_run_master, build_and_run_replica};
 use config::{parse_config, Config, DBFile, ReplicationRole};
-use master::instance::MasterInstance;
-use replica::instance::ReplicaInstance;
 use store::Store;
-
-use std::{cell::Cell, net::TcpListener};
 
 pub mod actor;
 pub mod config;
@@ -17,23 +13,11 @@ pub mod store;
 fn main() {
     println!("Logs from your program will appear here!");
     let config = parse_config();
-    // let store = Cell::new(build_store(&config));
-
-    // let listener = TcpListener::bind(format!("127.0.0.1:{}", config.port)).unwrap();
-    // listener
-    //     .set_nonblocking(true)
-    //     .expect("Cannot put TCP listener in non-blocking mode");
 
     if let ReplicationRole::Replica(_) = &config.replication.role {
-        main_actor_replica();
-        // let Some(mut instance) = ReplicaInstance::new(listener, store, config) else {
-        //     panic!("Unable to start connection with master instance")
-        // };
-        // instance.run()
+        build_and_run_master();
     } else {
-        main_actor();
-        // let mut instance = MasterInstance::new(listener, store, config);
-        // instance.run()
+        build_and_run_replica();
     }
 }
 
