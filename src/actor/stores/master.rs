@@ -43,7 +43,7 @@ struct WaitForReplicationAcks {
 struct BlockingXREAD {
     initial_client_tx: Sender<ConnectionMessage>,
     streams: Vec<String>,
-    timeout: Instant,
+    timeout: Option<Instant>,
 }
 
 pub struct MasterActor {
@@ -269,7 +269,7 @@ impl MasterActor {
         };
         let mut message = format!("*{}\r\n", streams.len());
         for (stream, id) in &streams {
-            let stream_values = self.store.get_stream_range(&stream, id.as_ref(), None);
+            let stream_values = self.store.get_stream_range(stream, id.as_ref(), None);
             message.push_str(&format!(
                 "*2\r\n{}{}",
                 format_string(Some(stream.clone())),
@@ -279,7 +279,11 @@ impl MasterActor {
 
         // Keep track to propagate futur XADD commands
         if let Some(block_for) = block_for {
-            let timeout = Instant::now() + Duration::from_millis(block_for.try_into().unwrap());
+            let timeout = if block_for > 0 {
+                Some(Instant::now() + Duration::from_millis(block_for.try_into().unwrap()))
+            } else {
+                None
+            };
             self.blocking_xreads.push(BlockingXREAD {
                 initial_client_tx: tx_back.clone(),
                 streams: streams.into_iter().map(|stream| stream.0).collect(),
@@ -476,14 +480,14 @@ impl MasterActor {
     }
 
     fn check_on_blocking_xreads(&mut self) {
-        self.blocking_xreads.retain(|task| {
-            if task.timeout <= Instant::now() {
+        self.blocking_xreads.retain(|task| match task.timeout {
+            Some(timeout) if timeout <= Instant::now() => {
                 task.initial_client_tx
                     .send(ConnectionMessage::SendString("$-1\r\n".to_owned()))
                     .unwrap();
-                return false;
+                false
             }
-            return true;
+            _ => true,
         });
     }
 }
