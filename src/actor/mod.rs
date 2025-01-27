@@ -9,7 +9,7 @@ use stores::{master::MasterActor, replica::ReplicaActor};
 use crate::{
     build_store,
     config::parse_config,
-    connections::{parser::BufferType, stream::RedisStream},
+    redis_stream::{parser::BufferType, stream::RedisStream},
 };
 
 pub mod connection;

@@ -1,13 +1,10 @@
-// #![allow(unused_imports)]
 use actor::{build_and_run_master, build_and_run_replica};
 use config::{parse_config, Config, DBFile, ReplicationRole};
 use store::Store;
 
 pub mod actor;
 pub mod config;
-pub mod connections;
-pub mod master;
-pub mod replica;
+pub mod redis_stream;
 pub mod store;
 
 fn main() {

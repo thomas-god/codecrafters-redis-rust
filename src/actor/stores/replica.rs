@@ -6,7 +6,7 @@ use std::{
 use crate::{
     actor::{connection::Connection, ConnectionMessage, StoreMessage},
     config::{Config, ReplicationRole},
-    connections::{
+    redis_stream::{
         fmt::{format_array, format_string},
         parser::{BufferType, Command, CommandVerb},
         stream::RedisStream,

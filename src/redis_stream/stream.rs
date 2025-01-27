@@ -60,7 +60,7 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::RedisStream;
-    use crate::connections::parser::BufferType;
+    use crate::redis_stream::parser::BufferType;
 
     #[test]
     fn test_parse_simple_string() {

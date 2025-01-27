@@ -11,7 +11,7 @@ use itertools::Itertools;
 use crate::{
     actor::{ConnectionMessage, StoreMessage},
     config::{Config, ReplicationRole},
-    connections::{
+    redis_stream::{
         fmt::{format_array, format_stream, format_string},
         parser::{BufferType, Command, CommandVerb},
     },

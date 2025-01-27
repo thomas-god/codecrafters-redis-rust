@@ -3,7 +3,7 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
-use crate::connections::stream::RedisStream;
+use crate::redis_stream::stream::RedisStream;
 
 use super::{ConnectionMessage, StoreMessage};
 
