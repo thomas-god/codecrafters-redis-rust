@@ -90,7 +90,16 @@ impl Store {
                 );
                 Some(new_val)
             }
-            _ => None,
+            _ => {
+                self.store.insert(
+                    key.to_owned(),
+                    Item {
+                        value: ValueType::String(1.to_string()),
+                        expiry: None,
+                    },
+                );
+                Some(1)
+            }
         }
     }
 
