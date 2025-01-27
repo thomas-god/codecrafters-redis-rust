@@ -106,7 +106,7 @@ impl MasterToClientConnection {
     }
 
     pub fn send_string(&mut self, message: &str) {
-        self.stream.send(message);
+        self.stream.send_string(message);
     }
 
     pub fn notify_replication_ack(&mut self, n_replicas: usize) {
@@ -145,7 +145,7 @@ impl MasterToClientConnection {
     }
 
     fn process_ping(&mut self) -> Option<PollResult> {
-        self.stream.send(&String::from("+PONG\r\n"));
+        self.stream.send_string(&String::from("+PONG\r\n"));
         println!("Sending PONG back");
         None
     }
@@ -153,7 +153,7 @@ impl MasterToClientConnection {
     fn process_echo(&mut self, command: &[String]) -> Option<PollResult> {
         if let Some(message) = command.get(1) {
             let message = format!("${}\r\n{}\r\n", message.len(), message);
-            self.stream.send(&message);
+            self.stream.send_string(&message);
             None
         } else {
             None
@@ -183,7 +183,7 @@ impl MasterToClientConnection {
         global_state.get_mut().set_string(key, value, ttl);
         if let ConnectionRole::Client = &self.connected_with {
             if self.replication.is_none() {
-                self.stream.send(&String::from("+OK\r\n"));
+                self.stream.send_string(&String::from("+OK\r\n"));
             }
         };
         Some(PollResult::Write(format_array(&command.to_vec())))
@@ -196,7 +196,7 @@ impl MasterToClientConnection {
     ) -> Option<PollResult> {
         let key = command.get(1)?;
         self.stream
-            .send(&format_string(global_state.get_mut().get_string(key)));
+            .send_string(&format_string(global_state.get_mut().get_string(key)));
         None
     }
 
@@ -212,7 +212,7 @@ impl MasterToClientConnection {
             Some(ItemType::Stream) => "+stream\r\n",
         };
 
-        self.stream.send(response);
+        self.stream.send_string(response);
         None
     }
 
@@ -304,7 +304,7 @@ impl MasterToClientConnection {
                     value.len(),
                     value
                 );
-                self.stream.send(&message);
+                self.stream.send_string(&message);
                 None
             }
             _ => panic!(),
@@ -322,7 +322,7 @@ impl MasterToClientConnection {
         for key in keys {
             response.push_str(&format!("${}\r\n{}\r\n", key.len(), key));
         }
-        self.stream.send(&response);
+        self.stream.send_string(&response);
         None
     }
 
@@ -340,7 +340,7 @@ impl MasterToClientConnection {
                     "master_repl_offset:{}\r\n",
                     config.replication.repl_offset
                 ));
-                self.stream.send(&format_string(Some(response)));
+                self.stream.send_string(&format_string(Some(response)));
                 None
             }
             _ => panic!(),
@@ -363,15 +363,15 @@ impl MasterToClientConnection {
     }
 
     fn process_psync(&mut self, config: &Config) -> Option<PollResult> {
-        self.stream.send(&format_string(Some(format!(
+        self.stream.send_string(&format_string(Some(format!(
             "+FULLRESYNC {} {}",
             config.replication.replid, config.replication.repl_offset
         ))));
 
         let empty_db = fs::read("empty.rdb").ok()?;
 
-        self.stream.send(&format!("${}\r\n", empty_db.len()));
-        self.stream.send_raw(&empty_db);
+        self.stream.send_string(&format!("${}\r\n", empty_db.len()));
+        self.stream.send_bytes(&empty_db);
         Some(PollResult::PromoteToReplica)
     }
 

@@ -29,13 +29,13 @@ impl<S: Write + Read> RedisStream<S> {
         }
     }
 
-    pub fn send(&mut self, message: &str) {
+    pub fn send_string(&mut self, message: &str) {
         if let Err(err) = self.stream.write_all(message.as_bytes()) {
             println!("Error when trying to send string {:?}: {:?}", &message, err);
         }
     }
 
-    pub fn send_raw(&mut self, bytes: &[u8]) {
+    pub fn send_bytes(&mut self, bytes: &[u8]) {
         if let Err(err) = self.stream.write_all(bytes) {
             println!("Error when trying to send bytes {:?}: {:?}", &bytes, err);
         }
@@ -78,7 +78,7 @@ mod tests {
         let mut redis_stream = RedisStream::new(stream);
 
         let message = String::from("+OK\r\n");
-        redis_stream.send(&message);
+        redis_stream.send_string(&message);
 
         assert_eq!(
             redis_stream.get_stream().as_slices(),

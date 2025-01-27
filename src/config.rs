@@ -2,6 +2,7 @@ use std::{collections::HashMap, env};
 
 type Args = HashMap<String, String>;
 
+#[derive(Clone)]
 pub struct Config {
     pub port: i32,
     pub replication: Replication,
