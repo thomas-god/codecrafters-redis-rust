@@ -498,6 +498,11 @@ impl MasterActor {
         };
 
         let Some(new_value) = self.store.incr(key) else {
+            tx_back
+                .send(ConnectionMessage::SendString(
+                    "-ERR value is not an integer or out of range\r\n".to_owned(),
+                ))
+                .unwrap();
             return;
         };
         tx_back

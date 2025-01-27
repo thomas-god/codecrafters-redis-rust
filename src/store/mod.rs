@@ -80,7 +80,8 @@ impl Store {
                 expiry,
             }) => {
                 let vaaaalue = val.clone();
-                let new_val = vaaaalue.parse::<usize>().unwrap() + 1;
+                let mut new_val = vaaaalue.parse::<usize>().ok()?;
+                new_val += 1;
                 self.store.insert(
                     key.to_owned(),
                     Item {
