@@ -3,9 +3,14 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
-use crate::redis_stream::stream::RedisStream;
+use crate::{
+    actor::{ConnectionMessage, StoreMessage},
+    connection::stream::RedisStream,
+};
 
-use super::{ConnectionMessage, StoreMessage};
+pub mod fmt;
+pub mod parser;
+pub mod stream;
 
 pub struct Connection {
     stream: RedisStream<TcpStream>,

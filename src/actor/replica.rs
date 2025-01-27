@@ -4,12 +4,13 @@ use std::{
 };
 
 use crate::{
-    actor::{connection::Connection, ConnectionMessage, StoreMessage},
+    actor::{ConnectionMessage, StoreMessage},
     config::{Config, ReplicationRole},
-    redis_stream::{
+    connection::{
         fmt::{format_array, format_string},
         parser::{BufferType, Command, CommandVerb},
         stream::RedisStream,
+        Connection,
     },
     store::Store,
 };

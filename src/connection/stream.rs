@@ -57,10 +57,9 @@ impl RedisStream<TcpStream> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-
     use super::RedisStream;
-    use crate::redis_stream::parser::BufferType;
+    use crate::connection::stream::BufferType;
+    use std::collections::VecDeque;
 
     #[test]
     fn test_parse_simple_string() {

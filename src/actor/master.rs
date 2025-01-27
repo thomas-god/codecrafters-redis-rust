@@ -11,7 +11,7 @@ use itertools::Itertools;
 use crate::{
     actor::{ConnectionMessage, StoreMessage},
     config::{Config, ReplicationRole},
-    redis_stream::{
+    connection::{
         fmt::{format_array, format_stream, format_string},
         parser::{BufferType, Command, CommandVerb},
     },
@@ -566,7 +566,7 @@ fn parse_xread_arguments(cmd: &[String]) -> Option<XREADArguments> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        actor::stores::master::parse_requested_stream_entry_id,
+        actor::master::parse_requested_stream_entry_id,
         store::stream::{RequestedStreamEntryId, StreamEntryId},
     };
 
