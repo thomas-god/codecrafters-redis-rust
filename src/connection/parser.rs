@@ -33,6 +33,7 @@ pub enum CommandVerb {
     WAIT,
     INCR,
     MULTI,
+    EXEC,
 }
 
 impl TryFrom<String> for CommandVerb {
@@ -57,6 +58,7 @@ impl TryFrom<String> for CommandVerb {
             "WAIT" => Ok(Self::WAIT),
             "INCR" => Ok(Self::INCR),
             "MULTI" => Ok(Self::MULTI),
+            "EXEC" => Ok(Self::MULTI),
             _ => Err("Unsupported command verb"),
         }
     }

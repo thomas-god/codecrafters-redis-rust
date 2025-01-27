@@ -106,6 +106,7 @@ impl MasterActor {
             CommandVerb::GET => self.process_get(&cmd, tx_back),
             CommandVerb::INCR => self.process_incr(&cmd, tx_back),
             CommandVerb::MULTI => self.process_mutli(&cmd, tx_back),
+            CommandVerb::EXEC => self.process_exec(&cmd, tx_back),
             CommandVerb::TYPE => self.process_type(&cmd, tx_back),
             CommandVerb::XADD => self.process_xadd(&cmd, tx_back),
             CommandVerb::XRANGE => self.process_xrange(&cmd, tx_back),
@@ -514,6 +515,14 @@ impl MasterActor {
     fn process_mutli(&self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
         tx_back
             .send(ConnectionMessage::SendString("+OK\r\n".to_owned()))
+            .unwrap();
+    }
+
+    fn process_exec(&self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+        tx_back
+            .send(ConnectionMessage::SendString(
+                "-ERR EXEC without MULTI\r\n".to_owned(),
+            ))
             .unwrap();
     }
 }
