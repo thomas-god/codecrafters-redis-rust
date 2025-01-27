@@ -104,6 +104,7 @@ impl MasterActor {
             CommandVerb::ECHO => self.process_echo(&cmd, tx_back),
             CommandVerb::SET => self.process_set(&cmd, tx_back),
             CommandVerb::GET => self.process_get(&cmd, tx_back),
+            CommandVerb::INCR => self.process_incr(&cmd, tx_back),
             CommandVerb::TYPE => self.process_type(&cmd, tx_back),
             CommandVerb::XADD => self.process_xadd(&cmd, tx_back),
             CommandVerb::XRANGE => self.process_xrange(&cmd, tx_back),
@@ -489,6 +490,19 @@ impl MasterActor {
             }
             _ => true,
         });
+    }
+
+    fn process_incr(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+        let Some(key) = cmd.get(1) else {
+            return;
+        };
+
+        let Some(new_value) = self.store.incr(key) else {
+            return;
+        };
+        tx_back
+            .send(ConnectionMessage::SendString(format!(":{new_value}\r\n")))
+            .unwrap();
     }
 }
 

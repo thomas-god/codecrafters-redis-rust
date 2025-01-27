@@ -73,6 +73,27 @@ impl Store {
         Some(value.clone())
     }
 
+    pub fn incr(&mut self, key: &str) -> Option<usize> {
+        match self.store.get(key) {
+            Some(Item {
+                value: ValueType::String(val),
+                expiry,
+            }) => {
+                let vaaaalue = val.clone();
+                let new_val = vaaaalue.parse::<usize>().unwrap() + 1;
+                self.store.insert(
+                    key.to_owned(),
+                    Item {
+                        value: ValueType::String(new_val.to_string()),
+                        expiry: *expiry,
+                    },
+                );
+                Some(new_val)
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_keys(&self) -> Vec<String> {
         self.store.keys().map(|key| key.to_string()).collect()
     }
