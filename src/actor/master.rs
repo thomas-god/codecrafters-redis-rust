@@ -46,6 +46,11 @@ struct BlockingXREAD {
     timeout: Option<Instant>,
 }
 
+struct Transaction {
+    client_tx: Sender<ConnectionMessage>,
+    commands: Vec<Vec<String>>,
+}
+
 pub struct MasterActor {
     store: Store,
     config: Config,
@@ -55,6 +60,7 @@ pub struct MasterActor {
     replicas: Vec<Sender<ConnectionMessage>>,
     wait_for_replication_acks: Option<WaitForReplicationAcks>,
     blocking_xreads: Vec<BlockingXREAD>,
+    transaction: Option<Transaction>,
 }
 
 impl MasterActor {
@@ -72,6 +78,7 @@ impl MasterActor {
             replicas,
             blocking_xreads,
             wait_for_replication_acks: None,
+            transaction: None,
         }
     }
 
@@ -512,18 +519,30 @@ impl MasterActor {
             .unwrap();
     }
 
-    fn process_multi(&self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+    fn process_multi(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+        self.transaction = Some(Transaction {
+            client_tx: tx_back.clone(),
+            commands: Vec::new(),
+        });
         tx_back
             .send(ConnectionMessage::SendString("+OK\r\n".to_owned()))
             .unwrap();
     }
 
-    fn process_exec(&self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+    fn process_exec(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
+        let Some(transaction) = &self.transaction else {
+            tx_back
+                .send(ConnectionMessage::SendString(
+                    "-ERR EXEC without MULTI\r\n".to_owned(),
+                ))
+                .unwrap();
+            return;
+        };
+
         tx_back
-            .send(ConnectionMessage::SendString(
-                "-ERR EXEC without MULTI\r\n".to_owned(),
-            ))
+            .send(ConnectionMessage::SendString("*0\r\n".to_owned()))
             .unwrap();
+        self.transaction = None;
     }
 }
 
