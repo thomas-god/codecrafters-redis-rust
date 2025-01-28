@@ -114,14 +114,20 @@ impl MasterActor {
         tx_back: Sender<ConnectionMessage>,
         connection_id: ConnectionID,
     ) {
-        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
+        if let Some(mut transaction) = self.transactions.swap_remove(&connection_id) {
             if command.verb == CommandVerb::EXEC {
-                self.process_exec(&command.cmd, tx_back, connection_id);
+                self.process_exec(transaction, connection_id);
+            } else if command.verb == CommandVerb::DISCARD {
+                println!("Discarding transaction");
+                tx_back
+                    .send(ConnectionMessage::SendString("+OK\r\n".to_owned()))
+                    .unwrap();
             } else {
                 tx_back
                     .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
                     .unwrap();
                 transaction.commands.push(command);
+                self.transactions.insert(connection_id, transaction);
             }
             return;
         }
@@ -143,7 +149,18 @@ impl MasterActor {
             CommandVerb::GET => self.process_get(&cmd, tx_back),
             CommandVerb::INCR => self.process_incr(&cmd, tx_back),
             CommandVerb::MULTI => self.process_multi(&cmd, tx_back, connection_id),
-            CommandVerb::EXEC => self.process_exec(&cmd, tx_back, connection_id),
+            CommandVerb::DISCARD => {
+                tx_back
+                    .send(ConnectionMessage::SendString(
+                        "-ERR DISCARD without MULTI\r\n".to_owned(),
+                    ))
+                    .unwrap();
+            }
+            CommandVerb::EXEC => tx_back
+                .send(ConnectionMessage::SendString(
+                    "-ERR EXEC without MULTI\r\n".to_owned(),
+                ))
+                .unwrap(),
             CommandVerb::TYPE => self.process_type(&cmd, tx_back),
             CommandVerb::XADD => self.process_xadd(&cmd, tx_back),
             CommandVerb::XRANGE => self.process_xrange(&cmd, tx_back),
@@ -567,20 +584,7 @@ impl MasterActor {
             .unwrap();
     }
 
-    fn process_exec(
-        &mut self,
-        _command: &[String],
-        tx_back: Sender<ConnectionMessage>,
-        connection_id: ConnectionID,
-    ) {
-        let Some(transaction) = self.transactions.swap_remove(&connection_id) else {
-            tx_back
-                .send(ConnectionMessage::SendString(
-                    "-ERR EXEC without MULTI\r\n".to_owned(),
-                ))
-                .unwrap();
-            return;
-        };
+    fn process_exec(&mut self, transaction: Transaction, connection_id: ConnectionID) {
         println!("Commands to execute: {:?}", transaction.commands);
         let mut message = format!("*{}\r\n", transaction.commands.len());
         let (dummy_tx, dummy_rx) = channel::<ConnectionMessage>();
@@ -591,7 +595,8 @@ impl MasterActor {
             };
             message.push_str(&response);
         }
-        tx_back
+        transaction
+            .client_tx
             .send(ConnectionMessage::SendString(message))
             .unwrap();
         self.transactions.swap_remove(&connection_id);
