@@ -50,7 +50,7 @@ struct BlockingXREAD {
 
 struct Transaction {
     client_tx: Sender<ConnectionMessage>,
-    commands: Vec<Vec<String>>,
+    commands: Vec<Command>,
 }
 
 pub struct MasterActor {
@@ -110,17 +110,38 @@ impl MasterActor {
 
     fn process_command(
         &mut self,
-        cmd: Command,
+        command: Command,
         tx_back: Sender<ConnectionMessage>,
         connection_id: ConnectionID,
     ) {
-        let Command { verb, cmd } = cmd;
+        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
+            if command.verb == CommandVerb::EXEC {
+                self.process_exec(&command.cmd, tx_back, connection_id);
+            } else {
+                tx_back
+                    .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
+                    .unwrap();
+                transaction.commands.push(command);
+            }
+            return;
+        }
+
+        self.process_simple_command(command, tx_back, connection_id);
+    }
+
+    fn process_simple_command(
+        &mut self,
+        command: Command,
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: String,
+    ) {
+        let Command { verb, cmd } = command;
         match verb {
             CommandVerb::PING => self.process_ping(tx_back),
             CommandVerb::ECHO => self.process_echo(&cmd, tx_back),
-            CommandVerb::SET => self.process_set(&cmd, tx_back, connection_id),
+            CommandVerb::SET => self.process_set(&cmd, tx_back),
             CommandVerb::GET => self.process_get(&cmd, tx_back),
-            CommandVerb::INCR => self.process_incr(&cmd, tx_back, connection_id),
+            CommandVerb::INCR => self.process_incr(&cmd, tx_back),
             CommandVerb::MULTI => self.process_multi(&cmd, tx_back, connection_id),
             CommandVerb::EXEC => self.process_exec(&cmd, tx_back, connection_id),
             CommandVerb::TYPE => self.process_type(&cmd, tx_back),
@@ -151,12 +172,7 @@ impl MasterActor {
         }
     }
 
-    fn process_set(
-        &mut self,
-        command: &[String],
-        tx_back: Sender<ConnectionMessage>,
-        connection_id: ConnectionID,
-    ) {
+    fn process_set(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
         let (Some(key), Some(value)) = (command.get(1), command.get(2)) else {
             return;
         };
@@ -170,14 +186,6 @@ impl MasterActor {
             (Some(cmd), Some(cmd_value)) if cmd == "px" => Some(cmd_value),
             _ => None,
         };
-
-        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
-            tx_back
-                .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
-                .unwrap();
-            transaction.commands.push(command.to_vec());
-            return;
-        }
 
         println!("Setting {}: {}", key, value);
         self.store.set_string(key, value, ttl);
@@ -523,23 +531,10 @@ impl MasterActor {
         });
     }
 
-    fn process_incr(
-        &mut self,
-        command: &[String],
-        tx_back: Sender<ConnectionMessage>,
-        connection_id: ConnectionID,
-    ) {
+    fn process_incr(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
         let Some(key) = command.get(1) else {
             return;
         };
-
-        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
-            tx_back
-                .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
-                .unwrap();
-            transaction.commands.push(command.to_vec());
-            return;
-        }
 
         let Some(new_value) = self.store.incr(key) else {
             tx_back
@@ -578,7 +573,7 @@ impl MasterActor {
         tx_back: Sender<ConnectionMessage>,
         connection_id: ConnectionID,
     ) {
-        let Some(transaction) = self.transactions.get(&connection_id) else {
+        let Some(transaction) = self.transactions.swap_remove(&connection_id) else {
             tx_back
                 .send(ConnectionMessage::SendString(
                     "-ERR EXEC without MULTI\r\n".to_owned(),
@@ -586,10 +581,18 @@ impl MasterActor {
                 .unwrap();
             return;
         };
-        // let mut message = format!("*{}\r\n", transaction.commands.len());
-        // transaction.commands.iter().map
+        println!("Commands to execute: {:?}", transaction.commands);
+        let mut message = format!("*{}\r\n", transaction.commands.len());
+        let (dummy_tx, dummy_rx) = channel::<ConnectionMessage>();
+        for cmd in &transaction.commands {
+            self.process_simple_command(cmd.clone(), dummy_tx.clone(), connection_id.clone());
+            let ConnectionMessage::SendString(response) = dummy_rx.recv().unwrap() else {
+                return;
+            };
+            message.push_str(&response);
+        }
         tx_back
-            .send(ConnectionMessage::SendString("*0\r\n".to_owned()))
+            .send(ConnectionMessage::SendString(message))
             .unwrap();
         self.transactions.swap_remove(&connection_id);
     }

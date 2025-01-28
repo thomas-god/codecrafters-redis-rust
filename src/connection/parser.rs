@@ -9,13 +9,13 @@ pub enum BufferType {
     Command(Command),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Command {
     pub verb: CommandVerb,
     pub cmd: Vec<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum CommandVerb {
     PING,
     ECHO,
