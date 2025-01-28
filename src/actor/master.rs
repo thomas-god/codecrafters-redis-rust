@@ -21,6 +21,8 @@ use crate::{
     },
 };
 
+use super::ConnectionID;
+
 #[derive(Debug, Default)]
 struct Replication {
     replication_offset: usize,
@@ -60,7 +62,7 @@ pub struct MasterActor {
     replicas: Vec<Sender<ConnectionMessage>>,
     wait_for_replication_acks: Option<WaitForReplicationAcks>,
     blocking_xreads: Vec<BlockingXREAD>,
-    transaction: Option<Transaction>,
+    transactions: IndexMap<ConnectionID, Transaction>,
 }
 
 impl MasterActor {
@@ -68,6 +70,7 @@ impl MasterActor {
         let (tx, rx) = channel();
         let replicas: Vec<Sender<ConnectionMessage>> = vec![];
         let blocking_xreads: Vec<BlockingXREAD> = Vec::new();
+        let transactions: IndexMap<ConnectionID, Transaction> = IndexMap::new();
 
         MasterActor {
             store,
@@ -78,7 +81,7 @@ impl MasterActor {
             replicas,
             blocking_xreads,
             wait_for_replication_acks: None,
-            transaction: None,
+            transactions,
         }
     }
 
@@ -88,9 +91,10 @@ impl MasterActor {
                 StoreMessage::NewBuffer {
                     value: BufferType::Command(cmd),
                     tx_back,
+                    connection_id,
                 } => {
                     println!("{cmd:?}");
-                    self.process_command(cmd, tx_back);
+                    self.process_command(cmd, tx_back, connection_id);
                 }
                 _ => todo!(),
             }
@@ -104,16 +108,21 @@ impl MasterActor {
         self.tx.clone()
     }
 
-    fn process_command(&mut self, cmd: Command, tx_back: Sender<ConnectionMessage>) {
+    fn process_command(
+        &mut self,
+        cmd: Command,
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: ConnectionID,
+    ) {
         let Command { verb, cmd } = cmd;
         match verb {
             CommandVerb::PING => self.process_ping(tx_back),
             CommandVerb::ECHO => self.process_echo(&cmd, tx_back),
-            CommandVerb::SET => self.process_set(&cmd, tx_back),
+            CommandVerb::SET => self.process_set(&cmd, tx_back, connection_id),
             CommandVerb::GET => self.process_get(&cmd, tx_back),
-            CommandVerb::INCR => self.process_incr(&cmd, tx_back),
-            CommandVerb::MULTI => self.process_multi(&cmd, tx_back),
-            CommandVerb::EXEC => self.process_exec(&cmd, tx_back),
+            CommandVerb::INCR => self.process_incr(&cmd, tx_back, connection_id),
+            CommandVerb::MULTI => self.process_multi(&cmd, tx_back, connection_id),
+            CommandVerb::EXEC => self.process_exec(&cmd, tx_back, connection_id),
             CommandVerb::TYPE => self.process_type(&cmd, tx_back),
             CommandVerb::XADD => self.process_xadd(&cmd, tx_back),
             CommandVerb::XRANGE => self.process_xrange(&cmd, tx_back),
@@ -142,7 +151,12 @@ impl MasterActor {
         }
     }
 
-    fn process_set(&mut self, command: &[String], tx_back: Sender<ConnectionMessage>) {
+    fn process_set(
+        &mut self,
+        command: &[String],
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: ConnectionID,
+    ) {
         let (Some(key), Some(value)) = (command.get(1), command.get(2)) else {
             return;
         };
@@ -156,6 +170,14 @@ impl MasterActor {
             (Some(cmd), Some(cmd_value)) if cmd == "px" => Some(cmd_value),
             _ => None,
         };
+
+        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
+            tx_back
+                .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
+                .unwrap();
+            transaction.commands.push(command.to_vec());
+            return;
+        }
 
         println!("Setting {}: {}", key, value);
         self.store.set_string(key, value, ttl);
@@ -501,10 +523,23 @@ impl MasterActor {
         });
     }
 
-    fn process_incr(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
-        let Some(key) = cmd.get(1) else {
+    fn process_incr(
+        &mut self,
+        command: &[String],
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: ConnectionID,
+    ) {
+        let Some(key) = command.get(1) else {
             return;
         };
+
+        if let Some(transaction) = self.transactions.get_mut(&connection_id) {
+            tx_back
+                .send(ConnectionMessage::SendString("+QUEUED\r\n".to_owned()))
+                .unwrap();
+            transaction.commands.push(command.to_vec());
+            return;
+        }
 
         let Some(new_value) = self.store.incr(key) else {
             tx_back
@@ -519,18 +554,31 @@ impl MasterActor {
             .unwrap();
     }
 
-    fn process_multi(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
-        self.transaction = Some(Transaction {
-            client_tx: tx_back.clone(),
-            commands: Vec::new(),
-        });
+    fn process_multi(
+        &mut self,
+        _command: &[String],
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: ConnectionID,
+    ) {
+        self.transactions.insert(
+            connection_id,
+            Transaction {
+                client_tx: tx_back.clone(),
+                commands: Vec::new(),
+            },
+        );
         tx_back
             .send(ConnectionMessage::SendString("+OK\r\n".to_owned()))
             .unwrap();
     }
 
-    fn process_exec(&mut self, cmd: &[String], tx_back: Sender<ConnectionMessage>) {
-        let Some(transaction) = &self.transaction else {
+    fn process_exec(
+        &mut self,
+        _command: &[String],
+        tx_back: Sender<ConnectionMessage>,
+        connection_id: ConnectionID,
+    ) {
+        let Some(transaction) = self.transactions.get(&connection_id) else {
             tx_back
                 .send(ConnectionMessage::SendString(
                     "-ERR EXEC without MULTI\r\n".to_owned(),
@@ -538,11 +586,12 @@ impl MasterActor {
                 .unwrap();
             return;
         };
-
+        // let mut message = format!("*{}\r\n", transaction.commands.len());
+        // transaction.commands.iter().map
         tx_back
             .send(ConnectionMessage::SendString("*0\r\n".to_owned()))
             .unwrap();
-        self.transaction = None;
+        self.transactions.swap_remove(&connection_id);
     }
 }
 

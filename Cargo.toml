@@ -26,3 +26,4 @@ indexmap = "2.7.0"
 itertools = "0.13.0"
 thiserror = "1.0.32"                                # error handling
 tokio = { version = "1.23.0", features = ["full"] } # async networking
+uuid = { version = "1.12.1", features = ["v4", "fast-rng"] }

@@ -46,6 +46,7 @@ impl ReplicaActor {
             if let StoreMessage::NewBuffer {
                 value: BufferType::Command(cmd),
                 tx_back,
+                connection_id: _,
             } = message
             {
                 println!("{cmd:?}");
@@ -58,6 +59,7 @@ impl ReplicaActor {
                 StoreMessage::NewBuffer {
                     value: BufferType::Command(cmd),
                     tx_back,
+                    connection_id: _,
                 } => {
                     println!("{cmd:?}");
                     self.process_command(&cmd, tx_back);

@@ -3,8 +3,10 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
+use uuid::Uuid;
+
 use crate::{
-    actor::{ConnectionMessage, StoreMessage},
+    actor::{ConnectionID, ConnectionMessage, StoreMessage},
     connection::stream::RedisStream,
 };
 
@@ -17,16 +19,19 @@ pub struct Connection {
     tx_store: Sender<StoreMessage>,
     tx: Sender<ConnectionMessage>,
     rx: Receiver<ConnectionMessage>,
+    connection_id: ConnectionID,
 }
 
 impl Connection {
     pub fn new(stream: RedisStream<TcpStream>, tx_store: Sender<StoreMessage>) -> Connection {
         let (tx, rx) = channel();
+        let connection_id = Uuid::new_v4().to_string();
         Connection {
             stream,
             tx_store,
             tx,
             rx,
+            connection_id,
         }
     }
 
@@ -42,6 +47,7 @@ impl Connection {
                     .send(StoreMessage::NewBuffer {
                         value: msg,
                         tx_back: self.tx.clone(),
+                        connection_id: self.connection_id.clone(),
                     })
                     .unwrap();
             }
